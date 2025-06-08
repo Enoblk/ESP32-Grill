@@ -1,11 +1,12 @@
 // =========================
-// PelletControl.cpp (modular, no direct ignition handling)
+// PelletControl.cpp (modular, using RelayControl)
 // =========================
 
 #include "PelletControl.h"
 #include "Globals.h"
 #include "Utility.h"
 #include "Ignition.h"
+#include "RelayControl.h"   // <-- NEW include
 #include <Arduino.h>
 
 // Only manage auger and fans. Never touch igniter relay in this file!
@@ -13,24 +14,24 @@
 void pellet_feed_loop() {
     static float pidIntegral = 0;
     static float pidLastError = 0;
-    static unsigned long augerOnUntil = 0;
-    static bool augerCurrentlyOn = false;
 
     double temp = readTemperature();
     unsigned long now = millis();
 
-    // Hopper and blower fans management
-if (grillRunning && !ignition_active()) {
-    digitalWrite(RELAY_HOPPER_FAN_PIN, HIGH);
-    digitalWrite(RELAY_BLOWER_FAN_PIN, HIGH);
-} else if (!grillRunning && temp >= 100.0) {
-    digitalWrite(RELAY_HOPPER_FAN_PIN, HIGH);  // Cooldown fan ON
-    digitalWrite(RELAY_BLOWER_FAN_PIN, LOW);   // Optionally leave blower OFF
-} else {
-    digitalWrite(RELAY_HOPPER_FAN_PIN, LOW);
-    digitalWrite(RELAY_BLOWER_FAN_PIN, LOW);
-}
+    // Relay request structure
+    RelayRequest req;
 
+    // Hopper and blower fans management
+    if (grillRunning && !ignition_active()) {
+        req.hopperFan = RELAY_ON;
+        req.blowerFan = RELAY_ON;
+    } else if (!grillRunning && temp >= 100.0) {
+        req.hopperFan = RELAY_ON;    // Cooldown fan ON
+        req.blowerFan = RELAY_OFF;   // Optionally leave blower OFF
+    } else {
+        req.hopperFan = RELAY_OFF;
+        req.blowerFan = RELAY_OFF;
+    }
 
     // Pellet feed PID logic (runs ONLY when grillRunning & not in ignition)
     if (grillRunning && !ignition_active()) {
@@ -46,14 +47,17 @@ if (grillRunning && !ignition_active()) {
         unsigned long onTime = (unsigned long)((pid / 100.0) * dutyPeriod);
         unsigned long phase = now % dutyPeriod;
         if (phase < onTime) {
-            digitalWrite(RELAY_AUGER_PIN, HIGH);
-            augerCurrentlyOn = true;
+            req.auger = RELAY_ON;
         } else {
-            digitalWrite(RELAY_AUGER_PIN, LOW);
-            augerCurrentlyOn = false;
+            req.auger = RELAY_OFF;
         }
     } else {
-        digitalWrite(RELAY_AUGER_PIN, LOW);
-        augerCurrentlyOn = false;
+        req.auger = RELAY_OFF;
     }
+
+    // Never touch igniter relay in this file!
+    req.igniter = RELAY_NOCHANGE;
+
+    // Make the request to the relay manager
+    relay_request_auto(&req);
 }

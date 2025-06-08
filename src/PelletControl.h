@@ -13,10 +13,10 @@ extern unsigned long igniteStartTime;
 extern double igniteStartTemp;
 extern double setpoint;
 
-void init_relay_pins();
+// NEW: For modular relay control, no digitalWrite here!
 void pellet_feed_loop();
-void save_setpoint(); // Store setpoint in Preferences
-void restore_setpoint(); // Restore setpoint from Preferences
+void save_setpoint();      // Store setpoint in Preferences
+void restore_setpoint();   // Restore setpoint from Preferences
 
 // PID settings access (for Web UI tuning, etc)
 extern float Kp, Ki, Kd;

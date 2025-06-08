@@ -1,4 +1,5 @@
-// ESP-Grill.ino - Minimal working Arduino .ino for ESP32 modular grill project
+// ESP-Grill.ino - Modular version for ESP32 grill project
+
 #include "Globals.h"
 #include "Utility.h"
 #include "Settings.h"
@@ -7,6 +8,7 @@
 #include "ButtonInput.h"
 #include "DisplayUI.h"
 #include "GrillWebServer.h"
+#include "RelayControl.h"
 #include <Wire.h>
 
 void setup() {
@@ -15,7 +17,7 @@ void setup() {
     display_init();
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
-    init_relay_pins();
+    relay_control_init();
     button_init();
     load_settings();
     setup_wifi_and_mdns();
@@ -32,13 +34,18 @@ void loop() {
     }
 
     // FAN COOLDOWN LOGIC
+    // Use relay manager for cooldown control.
     if (!grillRunning && readTemperature() > 100) {
-        digitalWrite(RELAY_HOPPER_FAN_PIN, HIGH);
+        RelayRequest req = { RELAY_NOCHANGE, RELAY_NOCHANGE, RELAY_ON, RELAY_NOCHANGE }; // hopper fan ON
+        relay_request_auto(&req);
     } else if (!grillRunning) {
-        digitalWrite(RELAY_HOPPER_FAN_PIN, LOW);
+        RelayRequest req = { RELAY_NOCHANGE, RELAY_NOCHANGE, RELAY_OFF, RELAY_NOCHANGE }; // hopper fan OFF
+        relay_request_auto(&req);
     }
+    // If grillRunning, normal logic applies in PelletControl/Ignition.
 
     handle_buttons();
     display_update();
+    relay_commit(); // Always apply latest requested relay states
     delay(50);
 }

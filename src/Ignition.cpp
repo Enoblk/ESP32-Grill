@@ -6,6 +6,7 @@
 #include "Ignition.h"
 #include "Globals.h"
 #include "Utility.h"
+#include "RelayControl.h"
 #include <Arduino.h>
 
 static bool ignition_in_progress = false;
@@ -18,28 +19,34 @@ void ignition_start(double temp_start) {
     ignition_in_progress = true;
     ignition_start_time = millis();
     ignition_temp_start = temp_start;
-    //Serial.println("Ignition start triggered!");
-
 }
 
 void ignition_loop() {
-    
     if (!ignition_in_progress) return;
-    // Always keep ALL required relays ON during ignition
-    digitalWrite(RELAY_IGNITER_PIN, HIGH);      // Igniter ON
-    digitalWrite(RELAY_AUGER_PIN, HIGH);        // Auger ON
-    digitalWrite(RELAY_HOPPER_FAN_PIN, HIGH);   // Hopper Fan ON
-    digitalWrite(RELAY_BLOWER_FAN_PIN, HIGH);   // Blower ON
-    //Serial.println("IGNITION PHASE: relays ON!");
 
+    // Build relay request: ALL relays ON for ignition
+    RelayRequest req;
+    req.igniter   = RELAY_ON;
+    req.auger     = RELAY_ON;
+    req.hopperFan = RELAY_ON;
+    req.blowerFan = RELAY_ON;
+
+    // Send request to relay manager
+    relay_request_auto(&req);
 
     double temp_now = readTemperature();
     unsigned long elapsed = millis() - ignition_start_time;
-    // Only turn OFF igniter AFTER ignition completes
-    if ((elapsed >= IGNITION_TIME_MS) && (temp_now >= ignition_temp_start + IGNITION_TEMP_DELTA)) {
-        digitalWrite(RELAY_IGNITER_PIN, LOW);   // Turn igniter OFF
-        ignition_in_progress = false;
 
+    // Only turn OFF igniter after ignition completes
+    if ((elapsed >= IGNITION_TIME_MS) && (temp_now >= ignition_temp_start + IGNITION_TEMP_DELTA)) {
+        // Turn igniter OFF (fans/auger still managed elsewhere)
+        req.igniter   = RELAY_OFF;
+        req.auger     = RELAY_NOCHANGE;
+        req.hopperFan = RELAY_NOCHANGE;
+        req.blowerFan = RELAY_NOCHANGE;
+        relay_request_auto(&req);
+
+        ignition_in_progress = false;
     }
 }
 
