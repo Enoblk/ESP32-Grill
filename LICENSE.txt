@@ -1,0 +1,8 @@
+Copyright (c) 2024 EnoBlk
+
+This project is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) License.
+
+You may use, modify, and share this project for personal, educational, and non-commercial purposes. 
+**Commercial use, including selling PCBs or completed devices based on this project, is strictly prohibited without explicit written permission from the copyright holder.**
+
+See: https://creativecommons.org/licenses/by-nc-sa/4.0/
