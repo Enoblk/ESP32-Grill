@@ -5,6 +5,11 @@
 #include "Ignition.h"
 #include <WiFi.h>
 #include <Preferences.h>
+//#include <ElegantOTA.h>
+#include <WiFiClient.h>
+#include <HTTPUpdate.h>
+
+
 
 void setup_grill_server() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -84,7 +89,8 @@ void setup_grill_server() {
     html += "<button onclick=\"fetch('/control?relay=ignite&state=off')\">Ignite OFF</button><br>";
     html += "<button onclick=\"fetch('/control?relay=blower&state=on')\">Blower ON</button>";
     html += "<button onclick=\"fetch('/control?relay=blower&state=off')\">Blower OFF</button><br><br>";
-    html += "<a href='/'>Back</a></body></html>";
+    html += "<button onclick=\"fetch('/ota').then(()=>alert('OTA started! Check serial for progress.'))\">OTA Update</button>";
+
     req->send(200, "text/html", html);
   });
 
@@ -127,4 +133,19 @@ void setup_grill_server() {
   });
 
   server.begin();
+
+  //ElegantOTA.begin(&server); // Enable ElegantOTA at /update
+  
+  server.on("/ota", HTTP_GET, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "Starting OTA update!");
+    delay(100);
+    WiFiClient client;
+    String binURL = "https://github.com/Enoblk/ESP32-Grill/releases/latest/download/firmware.bin";
+    t_httpUpdate_return ret = httpUpdate.update(client, binURL);
+    // Optional: Print result to serial
+    Serial.printf("OTA update result: %d\n", ret);
+});
+
+
+
 }
