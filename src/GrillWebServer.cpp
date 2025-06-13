@@ -7,7 +7,7 @@
 #include <Preferences.h>
 //#include <ElegantOTA.h>
 #include <WiFiClient.h>
-#include <HTTPUpdate.h>
+#include <ElegantOTA.h>
 
 
 
@@ -136,16 +136,34 @@ void setup_grill_server() {
 
   //ElegantOTA.begin(&server); // Enable ElegantOTA at /update
   
-  server.on("/ota", HTTP_GET, [](AsyncWebServerRequest *req) {
-    req->send(200, "text/plain", "Starting OTA update!");
-    delay(100);
-    WiFiClient client;
-    String binURL = "https://github.com/Enoblk/ESP32-Grill/releases/latest/download/firmware.bin";
-    t_httpUpdate_return ret = httpUpdate.update(client, binURL);
-    // Optional: Print result to serial
-    Serial.printf("OTA update result: %d\n", ret);
+ElegantOTA.onStart([]() {
+  Serial.println("OTA update started!");
+  // Turn off all relays during update for safety
+  digitalWrite(RELAY_IGNITER_PIN, LOW);
+  digitalWrite(RELAY_AUGER_PIN, LOW);
+  digitalWrite(RELAY_BLOWER_FAN_PIN, LOW);
+  digitalWrite(RELAY_HOPPER_FAN_PIN, LOW);
+  grillRunning = false;
 });
 
+ElegantOTA.onProgress([](size_t current, size_t final) {
+  Serial.printf("OTA Progress: %u%%\r", (current / (final / 100)));
+});
 
+ElegantOTA.onEnd([](bool success) {
+  if (success) {
+    Serial.println("\nOTA update finished successfully!");
+    Serial.println("Rebooting in 2 seconds...");
+    delay(2000);
+    ESP.restart(); // Force restart
+  } else {
+    Serial.println("\nOTA update failed!");
+  }
+});
+
+// Then your existing line:
+ElegantOTA.begin(&server);
 
 }
+
+
