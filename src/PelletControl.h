@@ -1,25 +1,37 @@
-// =========================
-// PelletControl.h
-// Pellet/Auger PID control & relay logic for ESP32 Grill Controller
-// =========================
-#ifndef PELLET_CONTROL_H
-#define PELLET_CONTROL_H
+// PelletControl.h - Advanced PID-based Pellet Feed Control
+#ifndef PELLETCONTROL_H
+#define PELLETCONTROL_H
 
 #include <Arduino.h>
 
-extern bool grillRunning;
-extern bool igniting;
-extern unsigned long igniteStartTime;
-extern double igniteStartTemp;
-extern double setpoint;
+// PID Controller structure
+struct PIDController {
+  float kp, ki, kd;           // PID coefficients
+  float integral;             // Integral accumulator
+  float previous_error;       // Previous error for derivative
+  float output;               // Current PID output
+  unsigned long last_time;    // Last calculation time
+  float output_min, output_max; // Output limits
+};
 
-// NEW: For modular relay control, no digitalWrite here!
+// Pellet feed control functions
+void pellet_init();
 void pellet_feed_loop();
-void save_setpoint();      // Store setpoint in Preferences
-void restore_setpoint();   // Restore setpoint from Preferences
+void pellet_set_target(double target);
+double pellet_get_target();
 
-// PID settings access (for Web UI tuning, etc)
-extern float Kp, Ki, Kd;
-extern unsigned long AUGER_INTERVAL, AUGER_ON_MIN, AUGER_ON_MAX;
+// PID functions
+void setPIDParameters(float kp, float ki, float kd);
+void getPIDParameters(float* kp, float* ki, float* kd);
+float calculatePID(PIDController* pid, float setpoint, float measurement);
+void resetPID(PIDController* pid);
 
-#endif // PELLET_CONTROL_H
+// Feed timing and control
+void pellet_calculate_feed_time(double temperature_error);
+void pellet_execute_feed_cycle();
+
+// Status and diagnostics
+String pellet_get_status();
+void pellet_print_diagnostics();
+
+#endif

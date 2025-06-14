@@ -1,15 +1,13 @@
-// =========================
-// ButtonInput.h
-// 3-Button UI handling for ESP32 Grill Controller
-// =========================
+// ButtonInput.h - Updated for GPIO13
 #ifndef BUTTON_INPUT_H
 #define BUTTON_INPUT_H
 
 #include <Arduino.h>
 
-#define BUTTON_UP_PIN     32
-#define BUTTON_DOWN_PIN   33
-#define BUTTON_SELECT_PIN 34
+// Button pin definitions - Updated for your relay pins
+#define BUTTON_UP_PIN     32  // GPIO32 - UP button
+#define BUTTON_DOWN_PIN   33  // GPIO33 - DOWN button
+//#define BUTTON_SELECT_PIN 13  // GPIO13 - SELECT button (available pin)
 
 extern double setpoint;
 
