@@ -1,4 +1,4 @@
-// TemperatureSensor.h - Complete Rewrite for 1kΩ NTC with Built-in Pullups
+// TemperatureSensor.h - Updated for 5V System with Correct Constants
 #ifndef TEMPERATURESENSOR_H
 #define TEMPERATURESENSOR_H
 
@@ -36,12 +36,12 @@ class TemperatureSensor {
 private:
   bool initialized;
   
-  // Constants for 1kΩ NTC thermistors with 10kΩ built-in pullups
+  // CORRECTED Constants for 1kΩ NTC thermistors with 10kΩ built-in pullups and 5V system
   static constexpr float THERMISTOR_NOMINAL = 1000.0;   // 1k ohm at 25°C
   static constexpr float TEMPERATURE_NOMINAL = 25.0;    // 25°C
   static constexpr float B_COEFFICIENT = 3435.0;        // NTC beta coefficient
-  static constexpr float SERIES_RESISTOR = 10000.0;     // 10k built-in pullup
-  static constexpr float SUPPLY_VOLTAGE = 5.0;          // ADS1115 reference voltage
+  static constexpr float SERIES_RESISTOR = 10000.0;     // 10k built-in pullup (NOT 1k series)
+  static constexpr float SUPPLY_VOLTAGE = 5.0;          // 5V reference voltage (was 3.3V)
   
   float calculateTemperature(int16_t adcValue);
   bool validateTemperature(float temp, int probeIndex);

@@ -1,4 +1,4 @@
-// Globals.h - Final configuration with correct pin assignments
+// Globals.h - Final configuration with correct pin assignments for 5V system
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
@@ -18,11 +18,11 @@
 #define RELAY_HOPPER_FAN_PIN  25  // GPIO25 - Hopper fan relay
 #define RELAY_BLOWER_FAN_PIN  14  // GPIO14 - Blower fan relay
 
-// Temperature sensor pins
-#define GRILL_TEMP_PIN 35     // GPIO35 - Main grill temperature (PT100 + 150Ω)
-#define AMBIENT_TEMP_PIN 36   // GPIO13 - Ambient temperature (10K NTC + 10KΩ)
+// Temperature sensor pins (CORRECTED for 5V system)
+#define GRILL_TEMP_PIN 35     // GPIO35 - Main grill temperature (PT100 + 150Ω) - 5V reference
+#define AMBIENT_TEMP_PIN 36   // GPIO36 - Ambient temperature (10K NTC + 10KΩ pullup) - 5V reference
 
-// ADS1115 channels for meat probes (high precision 1K NTC)
+// ADS1115 channels for meat probes (high precision 1K NTC with 10K pullups, 5V reference)
 #define MEAT_PROBE_1_CHANNEL 0  // ADS1115 A0 - Meat probe 1
 #define MEAT_PROBE_2_CHANNEL 1  // ADS1115 A1 - Meat probe 2  
 #define MEAT_PROBE_3_CHANNEL 2  // ADS1115 A2 - Meat probe 3
@@ -57,6 +57,10 @@ extern Preferences preferences;
 #define MAIN_LOOP_INTERVAL 100      // Main loop runs every 100ms
 #define TEMP_UPDATE_INTERVAL 1000   // Temperature updates every 1 second
 #define STATUS_PRINT_INTERVAL 10000 // Status printed every 10 seconds
+
+// ===== VOLTAGE REFERENCE CONSTANTS =====
+// IMPORTANT: These reflect your hardware change to 5V reference
+#define ADC_REFERENCE_VOLTAGE 5.0   // Changed from 3.3V to 5V
 
 // ===== FUNCTION DECLARATIONS =====
 // Note: Main function declarations are in their respective header files

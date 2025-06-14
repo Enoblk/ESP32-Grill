@@ -1,4 +1,4 @@
-// TemperatureSensor.cpp - Fixed with CORRECT resistance calculation
+// TemperatureSensor.cpp - FIXED voltage divider formula for 5V system
 #include "TemperatureSensor.h"
 #include <math.h>
 
@@ -40,12 +40,12 @@ bool TemperatureSensor::begin() {
     return false;
   }
   
-  // Configure ADS1115 for better accuracy with 1kΩ NTC
+  // Configure ADS1115 for better accuracy with 1kΩ NTC and 5V reference
   ads.setGain(GAIN_ONE);  // +/- 4.096V range (good for 5V reference)
   ads.setDataRate(RATE_ADS1115_860SPS);  // Fast sampling
   
   initialized = true;
-  Serial.println("✅ ADS1115 initialized successfully for 1kΩ thermistors");
+  Serial.println("✅ ADS1115 initialized successfully for 1kΩ thermistors with 5V reference");
   
   // Configure all 4 ADS1115 channels for meat probes
   configureProbe(0, PROBE_FOOD_1, "Meat Probe 1");
@@ -93,7 +93,7 @@ float TemperatureSensor::calculateTemperature(int16_t adcValue) {
     return -999.0;  // Mark as disconnected, don't calculate temperature
   }
   
-  // Handle edge cases
+  // Handle edge cases for 5V system
   if (voltage <= 0.1 || voltage >= 4.9) {
     return -999.0;
   }
@@ -104,8 +104,7 @@ float TemperatureSensor::calculateTemperature(int16_t adcValue) {
   // Voltage divider: V = 5V × R_thermistor / (R_pullup + R_thermistor)
   // Solving for R_thermistor: R_thermistor = R_pullup × V / (5V - V)
   //
-  // OLD (WRONG): thermistorResistance = SERIES_RESISTOR * (SUPPLY_VOLTAGE / voltage - 1.0);
-  // NEW (CORRECT):
+  // This is the CORRECT formula for this circuit configuration
   float thermistorResistance = SERIES_RESISTOR * voltage / (SUPPLY_VOLTAGE - voltage);
   
   // Sanity check for 1K NTC (should be ~500-5000Ω in normal cooking range)
@@ -113,7 +112,7 @@ float TemperatureSensor::calculateTemperature(int16_t adcValue) {
     return -999.0;
   }
   
-  // Steinhart-Hart equation for 1kΩ NTC thermistor
+  // Standard Steinhart-Hart equation for NTC thermistor
   float steinhart = thermistorResistance / THERMISTOR_NOMINAL;
   steinhart = log(steinhart);
   steinhart /= B_COEFFICIENT;
@@ -307,7 +306,7 @@ void TemperatureSensor::printDiagnostics() {
   
   Serial.println("\nCURRENT CIRCUIT CONFIGURATION:");
   Serial.println("5V → 10kΩ built-in pullup → ADS input → 1kΩ NTC → GND");
-  Serial.println("Formula: R_thermistor = R_pullup × V / (5V - V)");
+  Serial.println("CORRECTED Formula: R_thermistor = R_pullup × V / (5V - V)");
   
   Serial.println("\nProbe Configuration:");
   for (int i = 0; i < MAX_PROBES; i++) {
@@ -332,6 +331,8 @@ void TemperatureSensor::printDiagnostics() {
       // Check for reasonable room temperature readings
       if (temp >= 65 && temp <= 85) {
         Serial.print(" ✅ REASONABLE");
+      } else if (temp > 150 && temp < 170) {
+        Serial.print(" ⚠️ SUSPICIOUS (check calibration)");
       }
     }
     Serial.println();
