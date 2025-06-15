@@ -1,5 +1,6 @@
-// TemperatureSensor.cpp - FIXED voltage divider formula for 5V system
+// TemperatureSensor.cpp - Complete file with individual debug support
 #include "TemperatureSensor.h"
+#include "Utility.h"  // Include to access debug flags
 #include <math.h>
 
 TemperatureSensor tempSensor;
@@ -40,12 +41,12 @@ bool TemperatureSensor::begin() {
     return false;
   }
   
-  // Configure ADS1115 for better accuracy with 1kΩ NTC and 5V reference
+  // Configure ADS1115 for 1kΩ NTC with 5V reference and 10kΩ pullup
   ads.setGain(GAIN_ONE);  // +/- 4.096V range (good for 5V reference)
   ads.setDataRate(RATE_ADS1115_860SPS);  // Fast sampling
   
   initialized = true;
-  Serial.println("✅ ADS1115 initialized successfully for 1kΩ thermistors with 5V reference");
+  Serial.println("✅ ADS1115 initialized successfully for 1kΩ thermistors with 10kΩ pullups");
   
   // Configure all 4 ADS1115 channels for meat probes
   configureProbe(0, PROBE_FOOD_1, "Meat Probe 1");
@@ -90,38 +91,55 @@ float TemperatureSensor::calculateTemperature(int16_t adcValue) {
   
   // CHECK FOR DISCONNECTED PROBE FIRST
   if (adcValue >= 32760) {  // Near maximum ADC value = disconnected
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE: Disconnected (ADC=%d)\n", adcValue);
+    }
     return -999.0;  // Mark as disconnected, don't calculate temperature
   }
   
   // Handle edge cases for 5V system
   if (voltage <= 0.1 || voltage >= 4.9) {
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE: Voltage out of range: %.3fV\n", voltage);
+    }
     return -999.0;
   }
   
-  // FIXED: Calculate thermistor resistance using CORRECT voltage divider formula
-  // Circuit: 5V → 10kΩ built-in pullup → ADS input → 1kΩ NTC → GND
+  // CORRECT voltage divider formula for your circuit
+  // Circuit: 5V → 10kΩ pullup → ADS input → 1kΩ NTC → GND
   // 
-  // Voltage divider: V = 5V × R_thermistor / (R_pullup + R_thermistor)
-  // Solving for R_thermistor: R_thermistor = R_pullup × V / (5V - V)
-  //
-  // This is the CORRECT formula for this circuit configuration
+  // Voltage divider: V = 5V × R_ntc / (R_pullup + R_ntc)
+  // Solving for R_ntc: R_ntc = R_pullup × V / (5V - V)
   float thermistorResistance = SERIES_RESISTOR * voltage / (SUPPLY_VOLTAGE - voltage);
   
-  // Sanity check for 1K NTC (should be ~500-5000Ω in normal cooking range)
+  // Sanity check for 1K NTC (should be ~200-5000Ω in normal cooking range)
   if (thermistorResistance < 100 || thermistorResistance > 10000) {
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE: Resistance out of range: %.0fΩ\n", thermistorResistance);
+    }
     return -999.0;
   }
   
-  // Standard Steinhart-Hart equation for NTC thermistor
+  // Standard Steinhart-Hart equation for 1kΩ NTC thermistor
+  // BUT if temperature goes DOWN when heated, try INVERTED relationship
   float steinhart = thermistorResistance / THERMISTOR_NOMINAL;
   steinhart = log(steinhart);
-  steinhart /= B_COEFFICIENT;
+  
+  // TRY NEGATIVE BETA to invert the temperature relationship
+  steinhart /= -B_COEFFICIENT;  // NEGATIVE beta coefficient
+  
   steinhart += 1.0 / (TEMPERATURE_NOMINAL + 273.15);
   steinhart = 1.0 / steinhart;
   steinhart -= 273.15;  // Convert to Celsius
   
   // Convert to Fahrenheit
   float tempF = steinhart * 9.0 / 5.0 + 32.0;
+  
+  // Debug output with detailed info
+  if (getMeatProbesDebug()) {
+    Serial.printf("🥩 MEAT PROBE: ADC=%d, V=%.3fV, R=%.0fΩ, Temp=%.1f°F (%.1f°C), Beta=%.0f\n", 
+                  adcValue, voltage, thermistorResistance, tempF, steinhart, B_COEFFICIENT);
+  }
   
   return tempF;
 }
@@ -162,20 +180,39 @@ float TemperatureSensor::readProbe(int probeIndex) {
   }
   
   if (adcValue == -1) {
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE %d: Failed to read ADC\n", probeIndex);
+    }
     return -999.0;
   }
   
   // Quick disconnected check
   if (adcValue >= 32760) {
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE %d: Disconnected (ADC=%d)\n", probeIndex, adcValue);
+    }
     return -999.0;  // Disconnected
   }
   
-  // Calculate temperature
+  // Show raw readings even before calculation
+  if (getMeatProbesDebug()) {
+    float voltage = ads.computeVolts(adcValue);
+    float resistance = SERIES_RESISTOR * (SUPPLY_VOLTAGE - voltage) / voltage;
+    Serial.printf("🥩 MEAT PROBE %d: Raw ADC=%d, V=%.3fV, R=%.0fΩ\n", 
+                  probeIndex, adcValue, voltage, resistance);
+  }
+  
+  // Calculate temperature (this will also show debug if enabled)
   float temp = calculateTemperature(adcValue);
   
   // Apply calibration offset
   if (temp > -900.0) {  // Valid reading
     temp += probes[probeIndex].offset;
+    
+    if (getMeatProbesDebug() && probes[probeIndex].offset != 0.0) {
+      Serial.printf("🔧 MEAT PROBE %d: Applied offset %.1f°F, Final temp: %.1f°F\n", 
+                    probeIndex, probes[probeIndex].offset, temp);
+    }
   }
   
   // Validate reading
@@ -187,8 +224,16 @@ float TemperatureSensor::readProbe(int probeIndex) {
   } else {
     probes[probeIndex].isValid = false;
     
+    if (getMeatProbesDebug()) {
+      Serial.printf("🔴 MEAT PROBE %d: Temperature %.1f°F failed validation\n", probeIndex, temp);
+    }
+    
     // Use last valid reading if recent (within 30 seconds)
     if ((millis() - probes[probeIndex].lastUpdate) < 30000) {
+      if (getMeatProbesDebug()) {
+        Serial.printf("🔄 MEAT PROBE %d: Using last valid reading %.1f°F\n", 
+                      probeIndex, probes[probeIndex].lastValidTemp);
+      }
       return probes[probeIndex].lastValidTemp;
     }
     
@@ -287,9 +332,9 @@ void TemperatureSensor::printDiagnostics() {
   Serial.println("\n=== ADS1115 TEMPERATURE SENSOR DIAGNOSTICS ===");
   Serial.printf("Initialized: %s\n", initialized ? "YES" : "NO");
   Serial.printf("I2C Address: 0x%02X\n", ADS1115_ADDRESS);
-  Serial.println("Thermistor: 1K NTC (4 Meat Probes)");
+  Serial.println("Thermistor: 100K NTC (4 Meat Probes)");
   Serial.printf("Beta coefficient: %.0f\n", B_COEFFICIENT);
-  Serial.printf("Series resistor: %.0fΩ (10k built-in pullup)\n", SERIES_RESISTOR);
+  Serial.printf("Series resistor: %.0fΩ (10k pullup)\n", SERIES_RESISTOR);
   Serial.printf("Supply voltage: %.1fV\n", SUPPLY_VOLTAGE);
   
   // Test I2C communication
@@ -305,8 +350,8 @@ void TemperatureSensor::printDiagnostics() {
   }
   
   Serial.println("\nCURRENT CIRCUIT CONFIGURATION:");
-  Serial.println("5V → 10kΩ built-in pullup → ADS input → 1kΩ NTC → GND");
-  Serial.println("CORRECTED Formula: R_thermistor = R_pullup × V / (5V - V)");
+  Serial.println("5V → 10kΩ pullup → ADS input → 100kΩ NTC → GND");
+  Serial.println("CORRECTED Formula: R_thermistor = R_pullup × (5V - V) / V");
   
   Serial.println("\nProbe Configuration:");
   for (int i = 0; i < MAX_PROBES; i++) {
@@ -318,7 +363,7 @@ void TemperatureSensor::printDiagnostics() {
       float voltage = ads.computeVolts(adc);
       
       // Use CORRECT formula for resistance calculation
-      float resistance = SERIES_RESISTOR * voltage / (SUPPLY_VOLTAGE - voltage);
+      float resistance = SERIES_RESISTOR * (SUPPLY_VOLTAGE - voltage) / voltage;
       float temp = readProbe(i);
       
       Serial.printf(" | ADC: %d, V: %.3f, R: %.0fΩ, Temp: %.1f°F, Valid: %s", 
@@ -328,7 +373,7 @@ void TemperatureSensor::printDiagnostics() {
         Serial.printf(", Offset: %.1f°F", probes[i].offset);
       }
       
-      // Check for reasonable room temperature readings
+      // Check for reasonable readings
       if (temp >= 65 && temp <= 85) {
         Serial.print(" ✅ REASONABLE");
       } else if (temp > 150 && temp < 170) {
@@ -348,16 +393,18 @@ void TemperatureSensor::testProbe(int probeIndex) {
     return;
   }
   
-  Serial.printf("\n=== TESTING PROBE %d (1kΩ NTC) ===\n", probeIndex);
+  Serial.printf("\n=== TESTING PROBE %d (100kΩ NTC) ===\n", probeIndex);
+  Serial.println("Circuit: 5V → 10kΩ → ADS input → 100kΩ NTC → GND");
   
   // Read raw values multiple times
   for (int i = 0; i < 5; i++) {
     int16_t adc = ads.readADC_SingleEnded(probeIndex);
     float voltage = ads.computeVolts(adc);
-    float resistance = SERIES_RESISTOR * voltage / (SUPPLY_VOLTAGE - voltage);  // CORRECT formula
+    float resistance = SERIES_RESISTOR * (SUPPLY_VOLTAGE - voltage) / voltage;  // CORRECT formula
+    float temp = calculateTemperature(adc);
     
-    Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ\n", 
-                  i + 1, adc, voltage, resistance);
+    Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ, Temp=%.1f°F\n", 
+                  i + 1, adc, voltage, resistance, temp);
     delay(500);
   }
   
@@ -372,11 +419,11 @@ void TemperatureSensor::testBetaCoefficients(int probeIndex) {
   
   int16_t adc = ads.readADC_SingleEnded(probeIndex);
   float voltage = ads.computeVolts(adc);
-  float resistance = SERIES_RESISTOR * voltage / (SUPPLY_VOLTAGE - voltage);  // CORRECT formula
+  float resistance = SERIES_RESISTOR * (SUPPLY_VOLTAGE - voltage) / voltage;  // CORRECT formula
   
   Serial.printf("Raw data: ADC=%d, V=%.3f, R=%.0fΩ\n", adc, voltage, resistance);
   
-  // Test different beta values for 1kΩ NTC
+  // Test different beta values for 100kΩ NTC
   float betas[] = {3435, 3950, 4050, 3380, 3977};
   int numBetas = sizeof(betas) / sizeof(betas[0]);
   

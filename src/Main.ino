@@ -225,7 +225,7 @@ void testSpecificProbe() {
 
 void testAmbientSensor() {
   Serial.println("\n=== TESTING AMBIENT SENSOR ===");
-  
+
   for (int i = 0; i < 10; i++) {
     int adc = analogRead(AMBIENT_TEMP_PIN);
     float voltage = (adc / 4095.0) * 3.3;
@@ -234,7 +234,9 @@ void testAmbientSensor() {
     Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ\n", 
                   i + 1, adc, voltage, resistance);
     delay(500);
+  
   }
+ 
 }
 
 void testGrillSensor() {
@@ -251,16 +253,25 @@ void testGrillSensor() {
   }
 }
 
-// Serial command handler - add this to process commands
+// Serial command handler - FIXED VERSION
 void handleSerialCommands() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
     
     if (command == "test_meat") {
+      // Temporarily enable meat probe debug for testing
+      bool oldDebug = getMeatProbesDebug();
+      setMeatProbesDebug(true);
+      
       testSpecificProbe();
+      
+      // Restore previous debug setting
+      setMeatProbesDebug(oldDebug);
     } else if (command == "test_ambient") {
       testAmbientSensor();
+    } else if (command == "test_ambient_detailed") {
+      testAmbientNTC();  // NEW: Detailed NTC test
     } else if (command == "test_grill") {
       testGrillSensor();
     } else if (command == "diag") {
@@ -305,22 +316,34 @@ void handleSerialCommands() {
         Serial.println("Usage: calibrate_probe [1-4] [temperature]");
         Serial.println("Example: calibrate_probe 1 72.5");
       }
-    } else if (command == "debug_on") {
-      setTemperatureDebugMode(true);
-    } else if (command == "debug_off") {
-      setTemperatureDebugMode(false);
+    } else if (command == "debug_meat_on") {
+      setMeatProbesDebug(true);
+    } else if (command == "debug_meat_off") {
+      setMeatProbesDebug(false);
+    } else if (command == "debug_grill_on") {
+      setGrillDebug(true);
+    } else if (command == "debug_grill_off") {
+      setGrillDebug(false);
+    } else if (command == "debug_ambient_on") {
+      setAmbientDebug(true);
+    } else if (command == "debug_ambient_off") {
+      setAmbientDebug(false);
     } else if (command == "relay_status") {
       relay_print_status();
     } else if (command == "help") {
       Serial.println("\nAvailable commands:");
-      Serial.println("  test_meat - Test all meat probes individually");
+      Serial.println("  test_meat - Test all meat probes individually (with debug)");
       Serial.println("  test_ambient - Test ambient sensor 10 times");
+      Serial.println("  test_ambient_detailed - Detailed 100k NTC test with beta coefficients");
       Serial.println("  test_grill - Test grill sensor 10 times");
       Serial.println("  diag - Run full temperature diagnostics");
       Serial.println("  status - Print current system status");
       Serial.println("  i2c_scan - Scan I2C bus for devices");
       Serial.println("  calibrate_probe [1-4] [temp] - Calibrate probe to known temp");
-      Serial.println("  debug_on / debug_off - Toggle debug output");
+      Serial.println("  debug_meat_on/off - Toggle meat probe debug");
+      Serial.println("  debug_grill_on/off - Toggle grill sensor debug");
+      Serial.println("  debug_ambient_on/off - Toggle ambient sensor debug");
+      Serial.println("  debug_on / debug_off - Toggle ALL debug output");
       Serial.println("  relay_status - Show relay status");
       Serial.println("  help - Show this help message");
     } else if (command.length() > 0) {
