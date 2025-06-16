@@ -98,8 +98,20 @@ bool getRelayDebug() { return debugRelays; }
 bool getSystemDebug() { return debugSystem; }
 
 // ENHANCED CALIBRATED GRILL TEMPERATURE READING
+// Fixed readGrillTemperature() function
+// Replace your current function in Utility.cpp with this corrected version
+
 double readGrillTemperature() {
-  // Read ADC with averaging
+  // Single ADC reading with averaging (prevent multiple calls)
+  static unsigned long lastReading = 0;
+  static double cachedTemp = 70.0;
+  
+  // Only read every 100ms to prevent multiple rapid calls
+  if (millis() - lastReading < 100) {
+    return cachedTemp;
+  }
+  
+  // Read ADC with averaging for stability
   int totalADC = 0;
   for (int i = 0; i < 5; i++) {
     totalADC += analogRead(GRILL_TEMP_PIN);
@@ -107,20 +119,30 @@ double readGrillTemperature() {
   }
   int currentADC = totalADC / 5;
   
-  double tempF;
+  // Calculate voltage
+  double voltage = (currentADC / 4095.0) * 5.0;
   
-  if (grillCalibration.calibrated && grillCalibration.point1Set && grillCalibration.point2Set) {
-    // Use two-point calibration
-    tempF = grillCalibration.offset + (currentADC * grillCalibration.slope);
-  } else if (grillCalibration.point1Set) {
-    // Use single-point calibration (baseline only)
-    tempF = grillCalibration.temp1 - (currentADC - grillCalibration.adc1) * 0.05;
-  } else {
-    // No calibration - use simple default
-    tempF = 80.0 + (currentADC - 3200) * 0.05;  // Rough estimate
+  // CORRECTED voltage divider formula for your circuit:
+  // 5V → PT100 → GPIO35 → 150Ω → GND
+  // V_gpio = 5V × 150Ω / (PT100 + 150Ω)
+  // Solving for PT100: PT100 = 150Ω × (5V - V_gpio) / V_gpio
+  double rtdResistance = 150.0 * (5.0 - voltage) / voltage;
+  
+  // Sanity check on resistance (PT100 should be 80-200Ω in normal range)
+  if (rtdResistance < 50.0 || rtdResistance > 300.0) {
+    if (debugGrillSensor) {
+      Serial.printf("🔴 GRILL: Resistance out of range: %.1fΩ (ADC=%d, V=%.3f)\n", 
+                    rtdResistance, currentADC, voltage);
+    }
+    return -999.0;
   }
   
-  // Range check
+  // Convert resistance to temperature using PT100 RTD formula
+  // PT100: R(T) = R0(1 + αT) where α = 0.00385/°C, R0 = 100Ω
+  double tempC = (rtdResistance - 100.0) / (100.0 * 0.00385);
+  double tempF = tempC * 9.0 / 5.0 + 32.0;
+  
+  // Range validation
   if (!isValidTemperature(tempF) || tempF < -50.0 || tempF > 900.0) {
     if (debugGrillSensor) {
       Serial.printf("🔴 GRILL: Temperature out of range: %.1f°F\n", tempF);
@@ -128,17 +150,16 @@ double readGrillTemperature() {
     return -999.0;
   }
   
-  // Debug output
+  // Debug output with corrected calculations
   if (debugGrillSensor) {
-    String calType = "none";
-    if (grillCalibration.calibrated) calType = "two-point";
-    else if (grillCalibration.point1Set) calType = "single-point";
-    
-    Serial.printf("🔥 GRILL: ADC=%d, Temp=%.1f°F (%s calibration)\n", 
-                  currentADC, tempF, calType.c_str());
+    Serial.printf("🔥 GRILL CORRECTED: ADC=%d, V=%.3fV, R=%.1fΩ, Temp=%.1f°F (%.1f°C)\n", 
+                  currentADC, voltage, rtdResistance, tempF, tempC);
   }
   
-  lastValidGrillTemp = tempF;
+  // Cache result and timestamp
+  cachedTemp = tempF;
+  lastReading = millis();
+  
   return tempF;
 }
 
