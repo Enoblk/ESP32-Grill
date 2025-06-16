@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <WiFiClient.h>
+#include <ElegantOTA.h>
 
 void setup_grill_server() {
   // Main dashboard with all 6 temperatures
@@ -98,6 +99,7 @@ void setup_grill_server() {
     html += "<a href='/manual' class='link-btn'>Manual Control</a>";
     html += "<a href='/pid' class='link-btn'>PID Tuning</a>";
     html += "<a href='/debug' class='link-btn'>Debug</a>";
+    html += "<a href='/update' class='link-btn'>OTA Update</a>";
     html += "</div>";
     html += "</div>";
     
@@ -1273,7 +1275,470 @@ void setup_grill_server() {
   server.onNotFound([](AsyncWebServerRequest *req) {
     req->send(404, "text/plain", "Not Found");
   });
+// Add this to your GrillWebServer.cpp in the setup_grill_server() function
+// Add before the server.begin() line
 
-  server.begin();
+// Enhanced grill sensor diagnostics endpoint
+server.on("/grill_sensor_debug", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Grill Sensor Diagnostics</title>";
+  html += "<style>";
+  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
+  html += ".container { max-width: 800px; margin: 0 auto; }";
+  html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
+  html += ".reading { background: rgba(255,255,255,0.1); padding: 15px; margin: 10px 0; border-radius: 5px; }";
+  html += ".good { border-left: 5px solid #059669; }";
+  html += ".bad { border-left: 5px solid #dc2626; }";
+  html += ".warn { border-left: 5px solid #f59e0b; }";
+  html += ".value { font-size: 1.2em; font-weight: bold; }";
+  html += ".expected { color: #9ca3af; font-size: 0.9em; }";
+  html += "</style></head><body>";
+  
+  html += "<div class='container'>";
+  html += "<h1>🔥 Grill Sensor Detailed Diagnostics</h1>";
+  
+  // Take 5 readings and average them for stability
+  int totalADC = 0;
+  for (int i = 0; i < 5; i++) {
+    totalADC += analogRead(GRILL_TEMP_PIN);
+    delay(10);
+  }
+  int adcReading = totalADC / 5;
+  
+  // Calculate all the intermediate values
+  double voltage = (adcReading / 4095.0) * 5.0;
+  double rtdResistance = 150.0 * voltage / (5.0 - voltage);
+  
+  // Temperature calculation
+  double tempC = (rtdResistance - 100.0) / (100.0 * 0.00385);
+  double tempF = tempC * 9.0 / 5.0 + 32.0;
+  
+  // Determine status classes
+  String adcClass = "good";
+  String voltClass = "good"; 
+  String resClass = "good";
+  String tempClass = "good";
+  
+  if (adcReading <= 50 || adcReading >= 4000) adcClass = "bad";
+  else if (adcReading <= 200 || adcReading >= 3500) adcClass = "warn";
+  
+  if (voltage <= 0.1 || voltage >= 4.9) voltClass = "bad";
+  else if (voltage <= 0.5 || voltage >= 4.5) voltClass = "warn";
+  
+  if (rtdResistance < 50 || rtdResistance > 500) resClass = "bad";
+  else if (rtdResistance < 80 || rtdResistance > 300) resClass = "warn";
+  
+  if (tempF < -50 || tempF > 900 || isnan(tempF) || isinf(tempF)) tempClass = "bad";
+  else if (tempF < 32 || tempF > 600) tempClass = "warn";
+  
+  // Display readings
+  html += "<div class='reading " + adcClass + "'>";
+  html += "<h3>ADC Reading (Raw)</h3>";
+  html += "<div class='value'>" + String(adcReading) + " / 4095</div>";
+  html += "<div class='expected'>Expected range: 1000-3000 for normal temps</div>";
+  html += "</div>";
+  
+  html += "<div class='reading " + voltClass + "'>";
+  html += "<h3>Voltage</h3>";
+  html += "<div class='value'>" + String(voltage, 3) + " V</div>";
+  html += "<div class='expected'>Expected: 1.5-3.5V for cooking range</div>";
+  html += "</div>";
+  
+  html += "<div class='reading " + resClass + "'>";
+  html += "<h3>PT100 Resistance</h3>";
+  html += "<div class='value'>" + String(rtdResistance, 1) + " Ω</div>";
+  html += "<div class='expected'>Expected: ~108Ω at 70°F, ~138Ω at 200°F</div>";
+  html += "</div>";
+  
+  html += "<div class='reading " + tempClass + "'>";
+  html += "<h3>Calculated Temperature</h3>";
+  html += "<div class='value'>" + String(tempF, 1) + " °F</div>";
+  html += "<div class='expected'>Should match ambient temperature when grill is cold</div>";
+  html += "</div>";
+  
+  // Diagnostic analysis
+  html += "<h2>🔍 Automatic Analysis</h2>";
+  
+  if (adcReading <= 50) {
+    html += "<div class='reading bad'><h3>❌ SHORT CIRCUIT DETECTED</h3>";
+    html += "ADC reading near 0 indicates PT100 probe is shorted to ground or series resistor is failed.</div>";
+  } else if (adcReading >= 4000) {
+    html += "<div class='reading bad'><h3>❌ OPEN CIRCUIT DETECTED</h3>";
+    html += "ADC reading near maximum indicates broken wire or disconnected PT100 probe.</div>";
+  } else if (voltage <= 0.5) {
+    html += "<div class='reading bad'><h3>❌ VOLTAGE TOO LOW</h3>";
+    html += "Voltage too low - check series resistor value (should be 150Ω).</div>";
+  } else if (voltage >= 4.5) {
+    html += "<div class='reading bad'><h3>❌ VOLTAGE TOO HIGH</h3>";
+    html += "Voltage too high - PT100 resistance too high or open circuit.</div>";
+  } else if (rtdResistance < 80) {
+    html += "<div class='reading warn'><h3>⚠️ RESISTANCE LOW</h3>";
+    html += "PT100 resistance lower than expected - possible wrong probe type or damaged probe.</div>";
+  } else if (rtdResistance > 300) {
+    html += "<div class='reading warn'><h3>⚠️ RESISTANCE HIGH</h3>";
+    html += "PT100 resistance higher than expected - check connections or probe condition.</div>";
+  } else if (rtdResistance >= 100 && rtdResistance <= 120) {
+    html += "<div class='reading good'><h3>✅ NORMAL RANGE</h3>";
+    html += "PT100 resistance in normal range for room temperature (100-120Ω).</div>";
+  } else if (rtdResistance >= 80 && rtdResistance <= 200) {
+    html += "<div class='reading good'><h3>✅ REASONABLE RANGE</h3>";
+    html += "PT100 resistance in reasonable range. Temperature calculation appears correct.</div>";
+  }
+  
+  // Circuit diagram
+  html += "<h2>📋 Circuit Configuration</h2>";
+  html += "<div class='reading'>";
+  html += "<pre>";
+  html += "5V ──[150Ω]──●──[PT100]──GND\n";
+  html += "              │\n";
+  html += "           GPIO35\n";
+  html += "\n";
+  html += "Voltage Divider Formula:\n";
+  html += "V = 5V × R_pt100 / (150Ω + R_pt100)\n";
+  html += "\n";
+  html += "Expected Values:\n";
+  html += "70°F  → 108Ω → 2.09V → ADC:1711\n";
+  html += "200°F → 138Ω → 2.40V → ADC:1966\n";
+  html += "400°F → 176Ω → 2.70V → ADC:2212";
+  html += "</pre>";
+  html += "</div>";
+  
+  html += "<button onclick='location.reload()' style='padding:15px 30px; background:#059669; color:white; border:none; border-radius:5px; margin:20px 0; cursor:pointer;'>Refresh Reading</button>";
+  html += "<br><a href='/' style='color:#60a5fa;'>← Back to Main Dashboard</a>";
+  
+  html += "</div>";
+  
+  // Auto-refresh every 5 seconds
+  html += "<script>setTimeout(() => location.reload(), 5000);</script>";
+  
+  html += "</body></html>";
+  
+  req->send(200, "text/html", html);
+});
+
+// Quick JSON endpoint for just the raw values
+server.on("/grill_raw", HTTP_GET, [](AsyncWebServerRequest *req) {
+  int totalADC = 0;
+  for (int i = 0; i < 5; i++) {
+    totalADC += analogRead(GRILL_TEMP_PIN);
+    delay(5);
+  }
+  int adcReading = totalADC / 5;
+  
+  double voltage = (adcReading / 4095.0) * 5.0;
+  double resistance = 150.0 * voltage / (5.0 - voltage);
+  double tempC = (resistance - 100.0) / (100.0 * 0.00385);
+  double tempF = tempC * 9.0 / 5.0 + 32.0;
+  
+  String json = "{";
+  json += "\"adc\":" + String(adcReading) + ",";
+  json += "\"voltage\":" + String(voltage, 3) + ",";
+  json += "\"resistance\":" + String(resistance, 1) + ",";
+  json += "\"tempC\":" + String(tempC, 1) + ",";
+  json += "\"tempF\":" + String(tempF, 1);
+  json += "}";
+  
+  req->send(200, "application/json", json);
+});
+
+  // ... all your existing server.on() endpoints ...
+  
+  // Add ElegantOTA setup right before server.begin()
+  ElegantOTA.begin(&server);    // Start ElegantOTA
+  
+  // Optional: Set credentials for OTA (recommended for security)
+  // ElegantOTA.setAuth("admin", "your_password_here");
+  
+  // Optional: Add custom callbacks
+  ElegantOTA.onStart([]() {
+    Serial.println("OTA update started!");
+    // Stop grill operations during update for safety
+    grillRunning = false;
+    relay_emergency_stop();
+  });
+  
+  ElegantOTA.onProgress([](size_t current, size_t final) {
+    Serial.printf("OTA Progress: %u%%\r", (current / (final / 100)));
+  });
+  
+  ElegantOTA.onEnd([](bool success) {
+  if (success) {
+    Serial.println("OTA update successful! Rebooting in 2 seconds...");
+    delay(2000);  // Give time for the message to be sent
+    ESP.restart();  // Force reboot
+  } else {
+    Serial.println("OTA update failed!");
+  }
+  });
+  
+  server.onNotFound([](AsyncWebServerRequest *req) {
+    req->send(404, "text/plain", "Not Found");
+  });
+
+  server.on("/grill_raw_adc", HTTP_GET, [](AsyncWebServerRequest *req) {
+  // Take multiple readings for stability
+  int totalADC = 0;
+  for (int i = 0; i < 10; i++) {
+    totalADC += analogRead(GRILL_TEMP_PIN);
+    delay(5);
+  }
+  int avgADC = totalADC / 10;
+  
+  // Calculate voltage
+  double voltage = (avgADC / 4095.0) * 5.0;
+  
+  // Determine circuit condition
+  String condition;
+  String color;
+  
+  if (avgADC <= 50) {
+    condition = "SHORT CIRCUIT (Very Low Resistance)";
+    color = "#dc2626";
+  } else if (avgADC >= 4000) {
+    condition = "OPEN CIRCUIT (Broken Wire/Disconnected)";
+    color = "#dc2626";
+  } else if (avgADC >= 3500) {
+    condition = "VERY HIGH RESISTANCE (Failing Connection)";
+    color = "#f59e0b";
+  } else if (avgADC >= 3000) {
+    condition = "HIGH RESISTANCE (Check Connections)";
+    color = "#f59e0b";
+  } else if (avgADC >= 500 && avgADC <= 2500) {
+    condition = "NORMAL RANGE (Circuit OK)";
+    color = "#059669";
+  } else {
+    condition = "UNUSUAL READING (Check Circuit)";
+    color = "#f59e0b";
+  }
+  
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Grill ADC Raw Reading</title>";
+  html += "<style>";
+  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; text-align: center; }";
+  html += ".reading { background: rgba(255,255,255,0.1); padding: 30px; margin: 20px 0; border-radius: 10px; }";
+  html += ".big-number { font-size: 3em; font-weight: bold; margin: 20px 0; }";
+  html += ".voltage { font-size: 2em; margin: 15px 0; }";
+  html += ".condition { font-size: 1.5em; font-weight: bold; padding: 20px; border-radius: 10px; margin: 20px 0; }";
+  html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px; }";
+  html += "</style></head><body>";
+  
+  html += "<h1>🔧 Grill Sensor Raw ADC</h1>";
+  
+  html += "<div class='reading'>";
+  html += "<h2>Raw ADC Reading</h2>";
+  html += "<div class='big-number'>" + String(avgADC) + " / 4095</div>";
+  html += "<div class='voltage'>" + String(voltage, 3) + " V</div>";
+  html += "</div>";
+  
+  html += "<div class='condition' style='background-color: " + color + ";'>";
+  html += condition;
+  html += "</div>";
+  
+  // Expected values table
+  html += "<div class='reading'>";
+  html += "<h3>📊 Reference Values</h3>";
+  html += "<table style='width:100%; color:#fff; border-collapse: collapse;'>";
+  html += "<tr style='background: rgba(255,255,255,0.1);'><th style='padding:10px;'>Condition</th><th>ADC Range</th><th>Voltage</th></tr>";
+  html += "<tr><td style='padding:8px;'>Open Circuit</td><td>4000-4095</td><td>4.9-5.0V</td></tr>";
+  html += "<tr><td style='padding:8px;'>Very High R</td><td>3500-4000</td><td>4.3-4.9V</td></tr>";
+  html += "<tr><td style='padding:8px;'>High R</td><td>3000-3500</td><td>3.7-4.3V</td></tr>";
+  html += "<tr><td style='padding:8px;'>Normal Range</td><td>1000-2500</td><td>1.2-3.0V</td></tr>";
+  html += "<tr><td style='padding:8px;'>Short Circuit</td><td>0-50</td><td>0-0.1V</td></tr>";
+  html += "</table>";
+  html += "</div>";
+  
+  // Circuit diagram
+  html += "<div class='reading'>";
+  html += "<h3>🔌 Your Circuit</h3>";
+  html += "<pre style='text-align: left; background: #2a2a2a; padding: 15px; border-radius: 5px;'>";
+  html += "5V ──[150Ω]──●──[PT100]──GND\n";
+  html += "              │\n";
+  html += "           GPIO35\n";
+  html += "\n";
+  html += "Expected at room temp (70°F):\n";
+  html += "PT100 ≈ 108Ω\n";
+  html += "Voltage ≈ 2.1V\n";
+  html += "ADC ≈ 1700";
+  html += "</pre>";
+  html += "</div>";
+  
+  html += "<button class='btn' onclick='location.reload()'>🔄 Refresh Reading</button>";
+  html += "<br><a href='/' style='color: #60a5fa; margin-top: 20px; display: inline-block;'>← Back to Dashboard</a>";
+  
+  // Auto-refresh every 3 seconds
+  html += "<script>setTimeout(() => location.reload(), 3000);</script>";
+  
+  html += "</body></html>";
+  
+  req->send(200, "text/html", html);
+});
+
+server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Reboot Controller</title>";
+  html += "<style>";
+  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; text-align: center; }";
+  html += ".btn { padding: 20px 40px; background: #dc2626; color: white; border: none; border-radius: 10px; font-size: 1.2em; cursor: pointer; margin: 20px; }";
+  html += ".btn:hover { background: #b91c1c; }";
+  html += ".warning { background: #f59e0b; padding: 20px; border-radius: 10px; margin: 20px 0; }";
+  html += "</style></head><body>";
+  
+  html += "<h1>🔄 Reboot Controller</h1>";
+  
+  html += "<div class='warning'>";
+  html += "⚠️ <strong>Warning:</strong> This will immediately restart the ESP32.<br>";
+  html += "The grill will stop operation and restart with new firmware.";
+  html += "</div>";
+  
+  html += "<button class='btn' onclick='confirmReboot()'>REBOOT NOW</button>";
+  html += "<br><a href='/' style='color: #60a5fa; margin-top: 20px; display: inline-block;'>← Cancel - Back to Dashboard</a>";
+  
+  html += "<script>";
+  html += "function confirmReboot() {";
+  html += "  if (confirm('Are you sure you want to reboot the controller?\\n\\nThis will restart the ESP32 immediately.')) {";
+  html += "    document.body.innerHTML = '<h1>🔄 Rebooting...</h1><p>Please wait 30 seconds then reload the page.</p>';";
+  html += "    fetch('/do_reboot', {method: 'POST'});";
+  html += "    setTimeout(() => {";
+  html += "      window.location.href = '/';";
+  html += "    }, 30000);";
+  html += "  }";
+  html += "}";
+  html += "</script>";
+  
+  html += "</body></html>";
+  
+  req->send(200, "text/html", html);
+});
+
+// Actual reboot endpoint
+server.on("/do_reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
+  req->send(200, "text/plain", "Rebooting in 2 seconds...");
+  
+  Serial.println("Manual reboot requested via web interface");
+  
+  // Stop grill operations safely
+  grillRunning = false;
+  relay_emergency_stop();
+  
+  // Delay to send response, then reboot
+  delay(2000);
+  ESP.restart();
+});
+
+// Add this to your GrillWebServer.cpp to see debug output via web
+
+// Web-based debug output endpoint
+server.on("/grill_debug_live", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Live Grill Debug</title>";
+  html += "<style>";
+  html += "body { background: #1a1a1a; color: #fff; font-family: 'Courier New', monospace; padding: 20px; }";
+  html += ".debug-line { background: rgba(255,255,255,0.1); padding: 10px; margin: 5px 0; border-radius: 5px; font-size: 14px; }";
+  html += ".good { border-left: 4px solid #059669; }";
+  html += ".warn { border-left: 4px solid #f59e0b; }";
+  html += ".error { border-left: 4px solid #dc2626; }";
+  html += ".timestamp { color: #9ca3af; font-size: 12px; }";
+  html += "</style></head><body>";
+  
+  html += "<h1>🔍 Live Grill Sensor Debug</h1>";
+  html += "<p>Real-time debug output (equivalent to serial monitor)</p>";
+  
+  // Manual debug execution - call the temperature function and capture results
+  
+  // Read ADC
+  int totalADC = 0;
+  for (int i = 0; i < 5; i++) {
+    totalADC += analogRead(GRILL_TEMP_PIN);
+    delay(5);
+  }
+  int adcReading = totalADC / 5;
+  double voltage = (adcReading / 4095.0) * 5.0;
+  
+  // Calculate with old formula (wrong)
+  double oldResistance = 150.0 * voltage / (5.0 - voltage);
+  
+  // Calculate with corrected formula  
+  double correctedResistance = 150.0 * (5.0 - voltage) / voltage;
+  
+  // Add connection resistance correction
+  double connectionResistance = 88.4;
+  double finalResistance = correctedResistance + connectionResistance;
+  
+  // Calculate temperatures
+  double tempC = (finalResistance - 100.0) / (100.0 * 0.00385);
+  double tempF = tempC * 9.0 / 5.0 + 32.0;
+  
+  // Determine status
+  String status = "good";
+  String message = "Normal operation";
+  
+  if (voltage <= 0.1 || voltage >= 4.9) {
+    status = "error";
+    message = "Voltage out of range";
+  } else if (correctedResistance < 30 || correctedResistance > 300) {
+    status = "error"; 
+    message = "Resistance out of range";
+  } else if (tempF < -50 || tempF > 900) {
+    status = "error";
+    message = "Temperature out of range";
+  } else if (finalResistance < 80 || finalResistance > 200) {
+    status = "warn";
+    message = "Resistance suspicious but usable";
+  }
+  
+  unsigned long uptime = millis();
+  
+  html += "<div class='debug-line " + status + "'>";
+  html += "<div class='timestamp'>[" + String(uptime) + "ms] GRILL SENSOR DEBUG:</div>";
+  html += "🔥 ADC Reading: " + String(adcReading) + " / 4095<br>";
+  html += "🔥 Voltage: " + String(voltage, 3) + "V<br>";
+  html += "🔥 Old Formula Resistance: " + String(oldResistance, 1) + "Ω (WRONG)<br>";
+  html += "🔥 Corrected Formula: " + String(correctedResistance, 1) + "Ω<br>";
+  html += "🔧 Connection Resistance Added: +" + String(connectionResistance, 1) + "Ω<br>";
+  html += "🔥 Final PT100 Resistance: " + String(finalResistance, 1) + "Ω<br>";
+  html += "🌡️ Temperature: " + String(tempF, 1) + "°F (" + String(tempC, 1) + "°C)<br>";
+  html += "📊 Status: " + message;
+  html += "</div>";
+  
+  // Show what the actual function returns
+  double actualReading = readGrillTemperature();
+  String resultClass = (actualReading > -900) ? "good" : "error";
+  html += "<div class='debug-line " + resultClass + "'>";
+  html += "<div class='timestamp'>[" + String(millis()) + "ms] FUNCTION RESULT:</div>";
+  html += "🎯 readGrillTemperature() returns: " + String(actualReading, 1) + "°F";
+  if (actualReading == -999.0) {
+    html += " (SENSOR ERROR - check voltage/resistance limits)";
+  }
+  html += "</div>";
+  
+  // Circuit analysis
+  html += "<div class='debug-line good'>";
+  html += "<div class='timestamp'>CIRCUIT ANALYSIS:</div>";
+  html += "🔌 Your Circuit: 5V → PT100(" + String(finalResistance, 1) + "Ω) → GPIO35(" + String(voltage, 3) + "V) → 150Ω → GND<br>";
+  html += "📏 Expected at 70°F: 5V → PT100(108Ω) → GPIO35(2.1V) → 150Ω → GND<br>";
+  html += "⚠️ Extra Resistance: " + String(connectionResistance, 1) + "Ω (poor connections)<br>";
+  html += "✅ Temperature Calculation: (" + String(finalResistance, 1) + " - 100) / (100 × 0.00385) = " + String(tempC, 1) + "°C";
+  html += "</div>";
+  
+  html += "<button onclick='location.reload()' style='padding:15px 30px; background:#059669; color:white; border:none; border-radius:5px; margin:20px 0; cursor:pointer;'>🔄 Refresh Debug</button>";
+  html += "<br><a href='/' style='color:#60a5fa;'>← Back to Dashboard</a>";
+  
+  // Auto-refresh every 5 seconds
+  html += "<script>setTimeout(() => location.reload(), 5000);</script>";
+  
+  html += "</body></html>";
+  
+  req->send(200, "text/html", html);
+});
+
+server.begin();
   Serial.println("Web server started with all endpoints");
 }
