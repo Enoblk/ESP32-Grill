@@ -1,4 +1,4 @@
-// Main.ino - Complete ESP32 Grill Controller with Enhanced Diagnostics
+// Main.ino - Updated with calibration system integration
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -21,7 +21,7 @@ void setup() {
   while (!Serial) delay(10);
   
   Serial.println("\n=====================================");
-  Serial.println("ESP32 GRILL CONTROLLER - DIAGNOSTIC MODE");
+  Serial.println("ESP32 GRILL CONTROLLER - CALIBRATED MODE");
   Serial.println("=====================================");
   
   // Initialize I2C first
@@ -33,6 +33,9 @@ void setup() {
   pellet_init();
   ignition_init();
   button_init();
+  
+  // Initialize temperature calibration system FIRST
+  setupTemperatureCalibration();
   
   // Initialize temperature sensors with detailed diagnostics
   Serial.println("\nInitializing temperature sensors...");
@@ -60,15 +63,14 @@ void setup() {
   // Initialize web server
   setup_grill_server();
   
-  Serial.println("\nSetup complete! Running diagnostics...");
+  Serial.println("\nSetup complete! Temperature calibration system active!");
   
-  // Run initial diagnostics
-  runTemperatureDiagnostics();
+  // Show calibration status immediately
+  printCalibrationStatus();
   
-  Serial.println("\n🔧 DIAGNOSTIC MODE ACTIVE");
-  Serial.println("Temperature diagnostics will run every 30 seconds");
-  Serial.println("Watch serial output for detailed sensor readings");
-  Serial.println("Type 'help' for available commands");
+  Serial.println("\n🔧 CALIBRATION MODE ACTIVE");
+  Serial.println("Type 'cal_help' for calibration commands");
+  Serial.println("Type 'help' for all available commands");
   Serial.println("=====================================\n");
 }
 
@@ -115,7 +117,7 @@ void loop() {
     
     // Check for emergency conditions
     double grillTemp = readGrillTemperature();
-    if (grillTemp > EMERGENCY_TEMP && grillTemp != -999.0) {
+    if (isValidTemperature(grillTemp) && grillTemp > EMERGENCY_TEMP) {
       Serial.printf("EMERGENCY: Temperature %.1f°F exceeds limit!\n", grillTemp);
       relay_emergency_stop();
       grillRunning = false;
@@ -138,16 +140,6 @@ void loop() {
     
     runTemperatureDiagnostics();
     
-    // Test specific meat probes if they're reading 158°F
-    for (int i = 1; i <= 4; i++) {
-      float temp = tempSensor.getFoodTemperature(i);
-      if (temp > 157 && temp < 159) {
-        Serial.printf("\n🔧 Meat probe %d reading suspicious ~158°F - running detailed test:\n", i);
-        tempSensor.testProbe(i - 1);  // Convert to 0-based index
-        tempSensor.testBetaCoefficients(i - 1);
-      }
-    }
-    
     lastDiagnostic = now;
   }
   
@@ -158,16 +150,16 @@ void loop() {
 void printSystemStatus() {
   Serial.println("\n--- SYSTEM STATUS ---");
   
-  // Temperatures
+  // Temperatures with calibration info
   double grillTemp = readGrillTemperature();
   double ambientTemp = readAmbientTemperature();
   
   Serial.printf("Grill Temp: %.1f°F", grillTemp);
-  if (grillTemp == -999.0) Serial.print(" (SENSOR ERROR)");
+  if (!isValidTemperature(grillTemp)) Serial.print(" (SENSOR ERROR)");
   Serial.println();
   
   Serial.printf("Ambient Temp: %.1f°F", ambientTemp);
-  if (ambientTemp == -999.0) Serial.print(" (SENSOR ERROR)");
+  if (!isValidTemperature(ambientTemp)) Serial.print(" (SENSOR ERROR)");
   Serial.println();
   
   Serial.printf("Target: %.1f°F\n", setpoint);
@@ -176,10 +168,8 @@ void printSystemStatus() {
   for (int i = 1; i <= 4; i++) {
     float temp = tempSensor.getFoodTemperature(i);
     Serial.printf("Meat Probe %d: %.1f°F", i, temp);
-    if (temp == -999.0) {
+    if (!isValidTemperature(temp)) {
       Serial.print(" (NO PROBE)");
-    } else if (temp > 157 && temp < 159) {
-      Serial.print(" ⚠️ SUSPICIOUS");
     }
     Serial.println();
   }
@@ -211,53 +201,17 @@ void printSystemStatus() {
   Serial.println("-------------------\n");
 }
 
-// Add these functions for testing specific issues
-void testSpecificProbe() {
-  // Call this function from serial commands to test a specific probe
-  Serial.println("Testing all meat probes individually:");
-  
-  for (int i = 0; i < 4; i++) {
-    Serial.printf("\n=== TESTING MEAT PROBE %d ===\n", i + 1);
-    tempSensor.testProbe(i);
-    delay(1000);
-  }
-}
-
-void testAmbientSensor() {
-  Serial.println("\n=== TESTING AMBIENT SENSOR ===");
-
-  for (int i = 0; i < 10; i++) {
-    int adc = analogRead(AMBIENT_TEMP_PIN);
-    float voltage = (adc / 4095.0) * 3.3;
-    float resistance = 10000.0 * (3.3 / voltage - 1.0);
-    
-    Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ\n", 
-                  i + 1, adc, voltage, resistance);
-    delay(500);
-  
-  }
- 
-}
-
-void testGrillSensor() {
-  Serial.println("\n=== TESTING GRILL SENSOR ===");
-  
-  for (int i = 0; i < 10; i++) {
-    int adc = analogRead(GRILL_TEMP_PIN);
-    float voltage = (adc / 4095.0) * 3.3;
-    float resistance = 150.0 * voltage / (3.3 - voltage);
-    
-    Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.1fΩ\n", 
-                  i + 1, adc, voltage, resistance);
-    delay(500);
-  }
-}
-
-// Serial command handler - FIXED VERSION
+// Enhanced serial command handler with calibration support
 void handleSerialCommands() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
+    
+    // Handle calibration commands first
+    if (command.startsWith("cal_")) {
+      handleCalibrationCommands(command);
+      return;
+    }
     
     if (command == "test_meat") {
       // Temporarily enable meat probe debug for testing
@@ -271,7 +225,7 @@ void handleSerialCommands() {
     } else if (command == "test_ambient") {
       testAmbientSensor();
     } else if (command == "test_ambient_detailed") {
-      testAmbientNTC();  // NEW: Detailed NTC test
+      testAmbientNTC();
     } else if (command == "test_grill") {
       testGrillSensor();
     } else if (command == "diag") {
@@ -328,26 +282,81 @@ void handleSerialCommands() {
       setAmbientDebug(true);
     } else if (command == "debug_ambient_off") {
       setAmbientDebug(false);
+    } else if (command == "debug_on") {
+      setAllDebug(true);
+    } else if (command == "debug_off") {
+      setAllDebug(false);
     } else if (command == "relay_status") {
       relay_print_status();
     } else if (command == "help") {
       Serial.println("\nAvailable commands:");
-      Serial.println("  test_meat - Test all meat probes individually (with debug)");
-      Serial.println("  test_ambient - Test ambient sensor 10 times");
-      Serial.println("  test_ambient_detailed - Detailed 100k NTC test with beta coefficients");
-      Serial.println("  test_grill - Test grill sensor 10 times");
-      Serial.println("  diag - Run full temperature diagnostics");
-      Serial.println("  status - Print current system status");
-      Serial.println("  i2c_scan - Scan I2C bus for devices");
-      Serial.println("  calibrate_probe [1-4] [temp] - Calibrate probe to known temp");
-      Serial.println("  debug_meat_on/off - Toggle meat probe debug");
-      Serial.println("  debug_grill_on/off - Toggle grill sensor debug");
+      Serial.println("=== CALIBRATION COMMANDS ===");
+      Serial.println("  cal_help        - Show calibration help");
+      Serial.println("  cal_status      - Show calibration status");
+      Serial.println("  cal_test        - Test current temperature reading");
+      Serial.println("  cal_set2 <temp> - Set second calibration point");
+      Serial.println("  cal_reset       - Reset calibration to defaults");
+      Serial.println("");
+      Serial.println("=== DIAGNOSTIC COMMANDS ===");
+      Serial.println("  test_meat       - Test all meat probes individually");
+      Serial.println("  test_ambient    - Test ambient sensor 10 times");
+      Serial.println("  test_ambient_detailed - Detailed NTC test");
+      Serial.println("  test_grill      - Test grill sensor 10 times");
+      Serial.println("  diag            - Run full temperature diagnostics");
+      Serial.println("  status          - Print current system status");
+      Serial.println("  i2c_scan        - Scan I2C bus for devices");
+      Serial.println("");
+      Serial.println("=== DEBUG COMMANDS ===");
+      Serial.println("  debug_meat_on/off    - Toggle meat probe debug");
+      Serial.println("  debug_grill_on/off   - Toggle grill sensor debug");
       Serial.println("  debug_ambient_on/off - Toggle ambient sensor debug");
       Serial.println("  debug_on / debug_off - Toggle ALL debug output");
-      Serial.println("  relay_status - Show relay status");
-      Serial.println("  help - Show this help message");
+      Serial.println("");
+      Serial.println("=== OTHER COMMANDS ===");
+      Serial.println("  calibrate_probe [1-4] [temp] - Calibrate meat probe");
+      Serial.println("  relay_status     - Show relay status");
+      Serial.println("  help            - Show this help message");
     } else if (command.length() > 0) {
       Serial.println("Unknown command. Type 'help' for available commands.");
     }
+  }
+}
+
+// Test functions for compatibility
+void testSpecificProbe() {
+  Serial.println("Testing all meat probes individually:");
+  
+  for (int i = 0; i < 4; i++) {
+    Serial.printf("\n=== TESTING MEAT PROBE %d ===\n", i + 1);
+    tempSensor.testProbe(i);
+    delay(1000);
+  }
+}
+
+void testAmbientSensor() {
+  Serial.println("\n=== TESTING AMBIENT SENSOR ===");
+
+  for (int i = 0; i < 10; i++) {
+    int adc = analogRead(AMBIENT_TEMP_PIN);
+    float voltage = (adc / 4095.0) * 5.0;
+    float resistance = 10000.0 * (5.0 - voltage) / voltage;
+    
+    Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ\n", 
+                  i + 1, adc, voltage, resistance);
+    delay(500);
+  }
+}
+
+void testGrillSensor() {
+  Serial.println("\n=== TESTING GRILL SENSOR (CALIBRATED) ===");
+  
+  for (int i = 0; i < 10; i++) {
+    int adc = analogRead(GRILL_TEMP_PIN);
+    float voltage = (adc / 4095.0) * 5.0;
+    double temp = readGrillTemperature();
+    
+    Serial.printf("Reading %d: ADC=%d, V=%.3f, Temp=%.1f°F\n", 
+                  i + 1, adc, voltage, temp);
+    delay(500);
   }
 }

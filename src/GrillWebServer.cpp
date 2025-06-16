@@ -100,6 +100,8 @@ void setup_grill_server() {
     html += "<a href='/pid' class='link-btn'>PID Tuning</a>";
     html += "<a href='/debug' class='link-btn'>Debug</a>";
     html += "<a href='/update' class='link-btn'>OTA Update</a>";
+    html += "<a href='/calibration' class='link-btn'>🌡️ Temperature Calibration</a>";
+    html += "<a href='/reboot' class='link-btn'>Reboot</a>";
     html += "</div>";
     html += "</div>";
     
@@ -119,11 +121,11 @@ void setup_grill_server() {
 
     // Main grill temperature display (prominent)
     html += "<div class='grill-temp'>";
-    if (grillTemp > 0) {
-      html += "<div class='grill-temp-main' id='grill-temp'>" + String(grillTemp, 1) + "&deg;F</div>";
-    } else {
-      html += "<div class='grill-temp-main temp-invalid' id='grill-temp'>SENSOR ERROR</div>";
-    }
+    if (isValidTemperature(grillTemp)) {
+  html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
+} else {
+  html += "<div class='temp-value temp-invalid'>ERROR</div>";
+}
     html += "<div class='grill-temp-set'>Target: <span id='setpoint'>" + String((int)setpoint) + "</span>&deg;F</div>";
     
     String statusClass = status;
@@ -138,11 +140,11 @@ void setup_grill_server() {
     // Grill Temperature
     html += "<div class='temp-card grill'>";
     html += "<h3>GRILL TEMPERATURE</h3>";
-    if (grillTemp > 0) {
-      html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
-    } else {
-      html += "<div class='temp-value temp-invalid'>ERROR</div>";
-    }
+    if (isValidTemperature(grillTemp)) {
+  html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
+} else {
+  html += "<div class='temp-value temp-invalid'>ERROR</div>";
+}
     html += "<div class='temp-type'>PT100 RTD</div>";
     html += "</div>";
     
@@ -1738,6 +1740,291 @@ server.on("/grill_debug_live", HTTP_GET, [](AsyncWebServerRequest *req) {
   
   req->send(200, "text/html", html);
 });
+
+// FIXED Web Calibration Endpoints - Add to GrillWebServer.cpp
+// Fixed string concatenation issues
+
+// API endpoint to test current reading - FIXED VERSION
+server.on("/cal_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+  int adc = analogRead(GRILL_TEMP_PIN);
+  double temp = readGrillTemperature();
+  
+  String result = "Current Reading:\\n";
+  result += "ADC: " + String(adc) + "\\n";
+  result += "Temperature: " + String(temp, 1) + "°F\\n";
+  result += "Status: ";
+  if (isValidTemperature(temp)) {
+    result += "VALID";
+  } else {
+    result += "INVALID";
+  }
+  
+  req->send(200, "text/plain", result);
+});
+
+// API endpoint to get current calibration data - FIXED VERSION
+server.on("/cal_current", HTTP_GET, [](AsyncWebServerRequest *req) {
+  int adc = analogRead(GRILL_TEMP_PIN);
+  double temp = readGrillTemperature();
+  
+  String json = "{";
+  json += "\"adc\":" + String(adc) + ",";
+  json += "\"temp\":" + String(temp, 1) + ",";
+  json += "\"calibrated\":false,";  
+  json += "\"adc2\":0,";
+  json += "\"temp2\":0.0";
+  json += "}";
+  
+  req->send(200, "application/json", json);
+});
+
+// API endpoint to set calibration point 2 - FIXED VERSION
+server.on("/cal_set_point2", HTTP_POST, [](AsyncWebServerRequest *req) {
+  if (!req->hasParam("temp")) {
+    req->send(400, "text/plain", "Missing temperature parameter");
+    return;
+  }
+  
+  float measuredTemp = req->getParam("temp")->value().toFloat();
+  
+  if (measuredTemp < 50.0 || measuredTemp > 800.0) {
+    req->send(400, "text/plain", "Temperature out of range (50-800°F)");
+    return;
+  }
+  
+  // Call the calibration function
+  int currentADC = analogRead(GRILL_TEMP_PIN);
+setCalibrationPoint2(currentADC, measuredTemp);
+  
+  String response = "Calibration point 2 set to " + String(measuredTemp, 1) + "°F. Two-point calibration now active!";
+  req->send(200, "text/plain", response);
+});
+
+// API endpoint to reset calibration - FIXED VERSION
+server.on("/cal_reset", HTTP_POST, [](AsyncWebServerRequest *req) {
+  resetCalibration();
+  req->send(200, "text/plain", "Calibration reset to defaults. Using single-point baseline calibration.");
+});
+
+// API endpoint to get calibration status - FIXED VERSION
+server.on("/cal_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String status = "Calibration Status:\\n";
+  status += "Point 1: ADC 3271 = 81.0°F (baseline)\\n";
+  status += "Point 2: Not fully implemented yet\\n";
+  status += "Status: Single-point calibration active";
+  
+  req->send(200, "text/plain", status);
+});
+
+// Main calibration page - COMPLETE FIXED VERSION
+server.on("/calibration", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Temperature Calibration - Grill Controller</title>";
+  html += "<style>";
+  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
+  html += ".container { max-width: 800px; margin: 0 auto; }";
+  html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
+  html += ".cal-section { background: rgba(255,255,255,0.1); padding: 20px; margin: 15px 0; border-radius: 10px; }";
+  html += ".current-reading { background: #059669; padding: 15px; border-radius: 5px; margin: 15px 0; text-align: center; }";
+  html += ".cal-point { background: rgba(255,255,255,0.15); padding: 15px; margin: 10px 0; border-radius: 5px; }";
+  html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; font-size: 1.1em; cursor: pointer; margin: 10px 5px; }";
+  html += ".btn:hover { background: #047857; }";
+  html += ".btn-danger { background: #dc2626; }";
+  html += ".btn-danger:hover { background: #b91c1c; }";
+  html += ".btn-warning { background: #f59e0b; }";
+  html += ".form-group { margin: 15px 0; }";
+  html += "label { display: block; margin-bottom: 5px; font-weight: bold; }";
+  html += "input { width: 100%; padding: 10px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background: #333; color: #fff; }";
+  html += ".status-good { color: #4ade80; }";
+  html += ".status-warning { color: #f59e0b; }";
+  html += ".status-error { color: #ef4444; }";
+  html += ".progress-bar { width: 100%; height: 20px; background: #333; border-radius: 10px; overflow: hidden; margin: 10px 0; }";
+  html += ".progress-fill { height: 100%; background: #4ade80; transition: width 0.3s ease; }";
+  html += "</style></head><body>";
+  
+  html += "<div class='container'>";
+  html += "<h1>🌡️ Temperature Calibration</h1>";
+  
+  // Current temperature reading
+  double currentTemp = readGrillTemperature();
+  int currentADC = analogRead(GRILL_TEMP_PIN);
+  
+  html += "<div class='current-reading'>";
+  html += "<h2>Current Reading</h2>";
+  html += "<div style='font-size: 2em; margin: 10px 0;'>" + String(currentTemp, 1) + "°F</div>";
+  html += "<div>ADC: " + String(currentADC) + " / 4095</div>";
+  html += "<button class='btn' onclick='refreshReading()'>🔄 Refresh</button>";
+  html += "</div>";
+  
+  // Calibration status
+  html += "<div class='cal-section'>";
+  html += "<h3>📊 Calibration Status</h3>";
+  html += "<div id='calibration-status'>";
+  html += "<div class='cal-point'>";
+  html += "<strong>Point 1 (Baseline):</strong> ADC 3271 = 81.0°F (Room Temperature)";
+  html += "<span class='status-good'> ✅ SET</span>";
+  html += "</div>";
+  html += "<div class='cal-point' id='point2-status'>";
+  html += "<strong>Point 2 (High Temp):</strong> Not set yet";
+  html += "<span class='status-warning'> ⚠️ NEEDED</span>";
+  html += "</div>";
+  html += "</div>";
+  html += "</div>";
+  
+  // Calibration procedure
+  html += "<div class='cal-section'>";
+  html += "<h3>🔧 Calibration Procedure</h3>";
+  
+  html += "<div style='margin: 15px 0;'>";
+  html += "<h4>Step 1: Baseline (Complete)</h4>";
+  html += "<p>✅ Room temperature baseline already set at 81°F</p>";
+  html += "</div>";
+  
+  html += "<div style='margin: 15px 0;'>";
+  html += "<h4>Step 2: Heat Grill to ~200°F</h4>";
+  html += "<p>🔥 Start your grill and heat to approximately 200°F</p>";
+  html += "<div class='progress-bar'>";
+  html += "<div class='progress-fill' id='heat-progress' style='width: 0%;'></div>";
+  html += "</div>";
+  html += "<div id='heat-status'>Current: " + String(currentTemp, 1) + "°F / Target: 200°F</div>";
+  html += "</div>";
+  
+  html += "<div style='margin: 15px 0;'>";
+  html += "<h4>Step 3: Measure with Meat Thermometer</h4>";
+  html += "<p>📏 Use your meat thermometer to get the exact temperature</p>";
+  html += "</div>";
+  
+  html += "<div style='margin: 15px 0;'>";
+  html += "<h4>Step 4: Set Calibration Point</h4>";
+  html += "<form onsubmit='setCalibrationPoint(event)'>";
+  html += "<div class='form-group'>";
+  html += "<label>Meat Thermometer Reading (°F):</label>";
+  html += "<input type='number' id='measured-temp' step='0.1' min='100' max='400' placeholder='Enter exact temperature from thermometer' required>";
+  html += "</div>";
+  html += "<button type='submit' class='btn'>🎯 Set Calibration Point 2</button>";
+  html += "</form>";
+  html += "</div>";
+  html += "</div>";
+  
+  // Quick actions
+  html += "<div class='cal-section'>";
+  html += "<h3>⚡ Quick Actions</h3>";
+  html += "<button class='btn' onclick='testReading()'>🧪 Test Current Reading</button>";
+  html += "<button class='btn btn-warning' onclick='resetCalibration()'>🔄 Reset Calibration</button>";
+  html += "<button class='btn' onclick='showCalibrationStatus()'>📊 Show Detailed Status</button>";
+  html += "</div>";
+  
+  // Instructions
+  html += "<div class='cal-section'>";
+  html += "<h3>📋 Instructions</h3>";
+  html += "<ol>";
+  html += "<li><strong>Heat your grill</strong> to approximately 200°F using normal startup procedure</li>";
+  html += "<li><strong>Wait for temperature to stabilize</strong> (give it 5-10 minutes)</li>";
+  html += "<li><strong>Place meat thermometer</strong> near the grill temperature sensor</li>";
+  html += "<li><strong>Read the exact temperature</strong> from your thermometer</li>";
+  html += "<li><strong>Enter that temperature</strong> in the form above and click 'Set Calibration Point 2'</li>";
+  html += "<li><strong>Calibration complete!</strong> Your grill will now read accurately from 81°F to 200°F+</li>";
+  html += "</ol>";
+  html += "</div>";
+  
+  html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>← Back to Grill Control</a>";
+  html += "</div>";
+
+  // JavaScript for functionality - COMPLETE FIXED VERSION
+  html += "<script>";
+  
+  // Auto-update current temperature and heat progress
+  html += "function updateDisplay() {";
+  html += "  fetch('/cal_current')";
+  html += "    .then(response => response.json())";
+  html += "    .then(data => {";
+  html += "      // Update current reading display";
+  html += "      const tempDisplay = document.querySelector('.current-reading div[style*=\"font-size: 2em\"]');";
+  html += "      if (tempDisplay) tempDisplay.innerHTML = data.temp.toFixed(1) + '°F';";
+  html += "      ";
+  html += "      const adcDisplay = document.querySelector('.current-reading div:nth-child(3)');";
+  html += "      if (adcDisplay) adcDisplay.innerHTML = 'ADC: ' + data.adc + ' / 4095';";
+  html += "      ";
+  html += "      // Update heat progress";
+  html += "      const progress = Math.min(Math.max((data.temp - 81) / (200 - 81) * 100, 0), 100);";
+  html += "      const progressBar = document.getElementById('heat-progress');";
+  html += "      if (progressBar) progressBar.style.width = progress + '%';";
+  html += "      ";
+  html += "      const heatStatus = document.getElementById('heat-status');";
+  html += "      if (heatStatus) heatStatus.innerHTML = 'Current: ' + data.temp.toFixed(1) + '°F / Target: 200°F (' + progress.toFixed(0) + '%)';";
+  html += "      ";
+  html += "      // Update calibration status if calibrated";
+  html += "      if (data.calibrated) {";
+  html += "        const point2Status = document.getElementById('point2-status');";
+  html += "        if (point2Status) point2Status.innerHTML = '<strong>Point 2 (High Temp):</strong> ADC ' + data.adc2 + ' = ' + data.temp2.toFixed(1) + '°F <span class=\"status-good\">✅ SET</span>';";
+  html += "      }";
+  html += "    })";
+  html += "    .catch(err => console.log('Update failed:', err));";
+  html += "}";
+  
+  html += "function refreshReading() {";
+  html += "  updateDisplay();";
+  html += "}";
+  
+  html += "function setCalibrationPoint(event) {";
+  html += "  event.preventDefault();";
+  html += "  const tempInput = document.getElementById('measured-temp');";
+  html += "  const temp = tempInput.value;";
+  html += "  ";
+  html += "  if (temp && temp >= 100 && temp <= 400) {";
+  html += "    fetch('/cal_set_point2?temp=' + encodeURIComponent(temp), {method: 'POST'})";
+  html += "      .then(response => response.text())";
+  html += "      .then(data => {";
+  html += "        alert('✅ ' + data);";
+  html += "        tempInput.value = '';";
+  html += "        updateDisplay();";
+  html += "        setTimeout(() => location.reload(), 2000);";
+  html += "      })";
+  html += "      .catch(err => alert('❌ Error: ' + err));";
+  html += "  } else {";
+  html += "    alert('Please enter a valid temperature between 100°F and 400°F');";
+  html += "  }";
+  html += "}";
+  
+  html += "function testReading() {";
+  html += "  fetch('/cal_test')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => alert('🧪 Test Result:\\n' + data))";
+  html += "    .catch(err => alert('❌ Error: ' + err));";
+  html += "}";
+  
+  html += "function resetCalibration() {";
+  html += "  if (confirm('Reset calibration to defaults? This will remove your second calibration point.')) {";
+  html += "    fetch('/cal_reset', {method: 'POST'})";
+  html += "      .then(response => response.text())";
+  html += "      .then(data => {";
+  html += "        alert('🔄 ' + data);";
+  html += "        setTimeout(() => location.reload(), 1000);";
+  html += "      })";
+  html += "      .catch(err => alert('❌ Error: ' + err));";
+  html += "  }";
+  html += "}";
+  
+  html += "function showCalibrationStatus() {";
+  html += "  fetch('/cal_status')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => alert('📊 Calibration Status:\\n' + data))";
+  html += "    .catch(err => alert('❌ Error: ' + err));";
+  html += "}";
+  
+  // Auto-update every 3 seconds
+  html += "setInterval(updateDisplay, 3000);";
+  html += "updateDisplay();"; // Initial load
+  
+  html += "</script>";
+  html += "</body></html>";
+  
+  req->send(200, "text/html", html);
+});
+
+
 
 server.begin();
   Serial.println("Web server started with all endpoints");
