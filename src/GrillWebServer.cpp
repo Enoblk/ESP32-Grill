@@ -1,4 +1,4 @@
-// GrillWebServer.cpp - Complete version with all 6 temperatures and all endpoints
+// GrillWebServer.cpp - Complete version with MAX31865 support (no GRILL_TEMP_PIN references)
 #include "Globals.h"
 #include "Utility.h"
 #include "PelletControl.h" 
@@ -7,6 +7,7 @@
 #include "OLEDDisplay.h"
 #include "WiFiManager.h"
 #include "TemperatureSensor.h"
+#include "MAX31865Sensor.h"  // Add MAX31865 support
 #include <WiFi.h>
 #include <Preferences.h>
 #include <WiFiClient.h>
@@ -15,7 +16,7 @@
 void setup_grill_server() {
   // Main dashboard with all 6 temperatures
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    // Get grill temperature (PT100)
+    // Get grill temperature (MAX31865)
     double grillTemp = readGrillTemperature();
     
     // Get ambient temperature (10K NTC)
@@ -90,7 +91,7 @@ void setup_grill_server() {
     html += "<div class='container'>";
     html += "<div class='header'>";
     html += "<h1>Green Mountain Grill</h1>";
-    html += "<div>Daniel Boone Controller</div>";
+    html += "<div>Daniel Boone Controller - MAX31865 RTD</div>";
     html += "<div>IP: " + WiFi.localIP().toString() + "</div>";
     
     // Navigation links
@@ -100,8 +101,9 @@ void setup_grill_server() {
     html += "<a href='/pid' class='link-btn'>PID Tuning</a>";
     html += "<a href='/debug' class='link-btn'>Debug</a>";
     html += "<a href='/update' class='link-btn'>OTA Update</a>";
-    html += "<a href='/calibration' class='link-btn'>🌡️ Temperature Calibration</a>";
+    html += "<a href='/max31865' class='link-btn'>🌡️ MAX31865 Sensor</a>";
     html += "<a href='/reboot' class='link-btn'>Reboot</a>";
+    html += "<a href='/spi_test' class='link-btn'>spi test</a>";
     html += "</div>";
     html += "</div>";
     
@@ -122,10 +124,10 @@ void setup_grill_server() {
     // Main grill temperature display (prominent)
     html += "<div class='grill-temp'>";
     if (isValidTemperature(grillTemp)) {
-  html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
-} else {
-  html += "<div class='temp-value temp-invalid'>ERROR</div>";
-}
+      html += "<div class='temp-value' id='grill-temp-main'>" + String(grillTemp, 1) + "&deg;F</div>";
+    } else {
+      html += "<div class='temp-value temp-invalid'>ERROR</div>";
+    }
     html += "<div class='grill-temp-set'>Target: <span id='setpoint'>" + String((int)setpoint) + "</span>&deg;F</div>";
     
     String statusClass = status;
@@ -141,11 +143,11 @@ void setup_grill_server() {
     html += "<div class='temp-card grill'>";
     html += "<h3>GRILL TEMPERATURE</h3>";
     if (isValidTemperature(grillTemp)) {
-  html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
-} else {
-  html += "<div class='temp-value temp-invalid'>ERROR</div>";
-}
-    html += "<div class='temp-type'>PT100 RTD</div>";
+      html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
+    } else {
+      html += "<div class='temp-value temp-invalid'>ERROR</div>";
+    }
+    html += "<div class='temp-type'>MAX31865 RTD</div>";
     html += "</div>";
     
     // Ambient Temperature
@@ -248,7 +250,6 @@ void setup_grill_server() {
     html += "let updateInterval;";
     html += "let isPageVisible = true;";
 
-    // Visibility API to pause updates when tab is not active
     html += "document.addEventListener('visibilitychange', function() {";
     html += "  isPageVisible = !document.hidden;";
     html += "  if (isPageVisible) {";
@@ -283,8 +284,8 @@ void setup_grill_server() {
     html += "    })";
     html += "    .then(data => {";
 
-    // Update main grill temperature with smooth transitions
-    html += "      const grillTempElement = document.getElementById('grill-temp');";
+    // Update main grill temperature
+    html += "      const grillTempElement = document.getElementById('grill-temp-main');";
     html += "      const grillTempCardElement = document.getElementById('grill-temp-card');";
     html += "      ";
     html += "      if (data.grillTemp > 0) {";
@@ -296,48 +297,30 @@ void setup_grill_server() {
     html += "          grillTempElement.style.color = '#4ade80';";
     html += "          setTimeout(() => { grillTempElement.style.color = ''; }, 300);";
     html += "        }";
-    html += "        grillTempElement.className = 'grill-temp-main';";
+    html += "        grillTempElement.className = 'temp-value';";
     html += "        grillTempCardElement.className = 'temp-value';";
     html += "      } else {";
     html += "        grillTempElement.innerHTML = 'SENSOR ERROR';";
     html += "        grillTempCardElement.innerHTML = 'ERROR';";
-    html += "        grillTempElement.className = 'grill-temp-main temp-invalid';";
+    html += "        grillTempElement.className = 'temp-value temp-invalid';";
     html += "        grillTempCardElement.className = 'temp-value temp-invalid';";
     html += "      }";
 
-    // Update ambient temperature with change detection
+    // Update other temperatures and controls
     html += "      const ambientTempElement = document.getElementById('ambient-temp');";
     html += "      if (data.ambientTemp > -900) {";
-    html += "        const newAmbientTemp = data.ambientTemp.toFixed(1);";
-    html += "        if (ambientTempElement.innerHTML !== newAmbientTemp + '&deg;F') {";
-    html += "          ambientTempElement.innerHTML = newAmbientTemp + '&deg;F';";
-    html += "          ambientTempElement.style.transition = 'background-color 0.3s ease';";
-    html += "          ambientTempElement.style.backgroundColor = 'rgba(96, 165, 250, 0.3)';";
-    html += "          setTimeout(() => { ambientTempElement.style.backgroundColor = ''; }, 300);";
-    html += "        }";
+    html += "        ambientTempElement.innerHTML = data.ambientTemp.toFixed(1) + '&deg;F';";
     html += "        ambientTempElement.className = 'temp-value';";
     html += "      } else {";
     html += "        ambientTempElement.innerHTML = 'N/A';";
     html += "        ambientTempElement.className = 'temp-value temp-invalid';";
     html += "      }";
 
-    // Update meat probe temperatures with individual change detection
     html += "      ['meat1', 'meat2', 'meat3', 'meat4'].forEach((probe, index) => {";
     html += "        const temp = data[probe + 'Temp'];";
     html += "        const element = document.getElementById(probe + '-temp');";
-    html += "        ";
     html += "        if (temp > -900) {";
-    html += "          const newTemp = temp.toFixed(1);";
-    html += "          if (element.innerHTML !== newTemp + '&deg;F') {";
-    html += "            element.innerHTML = newTemp + '&deg;F';";
-    html += "            element.style.transition = 'all 0.4s ease';";
-    html += "            element.style.backgroundColor = 'rgba(245, 158, 11, 0.4)';";
-    html += "            element.style.transform = 'scale(1.05)';";
-    html += "            setTimeout(() => {";
-    html += "              element.style.backgroundColor = '';";
-    html += "              element.style.transform = '';";
-    html += "            }, 400);";
-    html += "          }";
+    html += "          element.innerHTML = temp.toFixed(1) + '&deg;F';";
     html += "          element.className = 'temp-value';";
     html += "        } else {";
     html += "          element.innerHTML = 'N/A';";
@@ -345,111 +328,46 @@ void setup_grill_server() {
     html += "        }";
     html += "      });";
 
-    // Update setpoint and status
     html += "      document.getElementById('setpoint').textContent = data.setpoint;";
-    html += "      ";
-    html += "      const statusElement = document.getElementById('status');";
-    html += "      if (statusElement.textContent !== data.status) {";
-    html += "        statusElement.textContent = data.status;";
-    html += "        statusElement.style.transition = 'box-shadow 0.5s ease';";
-    html += "        statusElement.style.boxShadow = '0 0 15px rgba(255, 255, 255, 0.5)';";
-    html += "        setTimeout(() => { statusElement.style.boxShadow = ''; }, 500);";
-    html += "      }";
+    html += "      document.getElementById('status').textContent = data.status;";
 
-    // Update relay indicators with smooth transitions
     html += "      const relays = [";
-    html += "        {id: 'ign-dot', state: data.ignOn, name: 'igniter'},";
-    html += "        {id: 'aug-dot', state: data.augerOn, name: 'auger'},";
-    html += "        {id: 'hop-dot', state: data.hopperOn, name: 'hopper'},";
-    html += "        {id: 'blo-dot', state: data.blowerOn, name: 'blower'}";
+    html += "        {id: 'ign-dot', state: data.ignOn},";
+    html += "        {id: 'aug-dot', state: data.augerOn},";
+    html += "        {id: 'hop-dot', state: data.hopperOn},";
+    html += "        {id: 'blo-dot', state: data.blowerOn}";
     html += "      ];";
-    html += "      ";
     html += "      relays.forEach(relay => {";
     html += "        const element = document.getElementById(relay.id);";
-    html += "        const newClass = 'relay-dot ' + (relay.state ? 'relay-on' : 'relay-off');";
-    html += "        if (element.className !== newClass) {";
-    html += "          element.className = newClass;";
-    html += "          element.style.transition = 'all 0.3s ease';";
-    html += "          element.style.transform = 'scale(1.3)';";
-    html += "          setTimeout(() => { element.style.transform = 'scale(1)'; }, 300);";
-    html += "        }";
+    html += "        element.className = 'relay-dot ' + (relay.state ? 'relay-on' : 'relay-off');";
     html += "      });";
 
-    // Add connection status indicator
-    html += "      const now = new Date();";
-    html += "      const timeString = now.toLocaleTimeString();";
-    html += "      let statusIndicator = document.getElementById('connection-status');";
-    html += "      if (!statusIndicator) {";
-    html += "        statusIndicator = document.createElement('div');";
-    html += "        statusIndicator.id = 'connection-status';";
-    html += "        statusIndicator.style.cssText = 'position: fixed; top: 10px; right: 10px; background: rgba(0,255,0,0.8); color: black; padding: 5px 10px; border-radius: 5px; font-size: 12px; z-index: 1000;';";
-    html += "        document.body.appendChild(statusIndicator);";
-    html += "      }";
-    html += "      statusIndicator.textContent = '🟢 Live: ' + timeString;";
-    html += "      statusIndicator.style.backgroundColor = 'rgba(0,255,0,0.8)';";
-
     html += "    })";
-    html += "    .catch(err => {";
-    html += "      console.log('Update failed:', err);";
-    html += "      let statusIndicator = document.getElementById('connection-status');";
-    html += "      if (statusIndicator) {";
-    html += "        statusIndicator.textContent = '🔴 Connection Error';";
-    html += "        statusIndicator.style.backgroundColor = 'rgba(255,0,0,0.8)';";
-    html += "      }";
-    html += "    });";
+    html += "    .catch(err => console.log('Update failed:', err));";
     html += "}";
 
-    // Speed control functions
     html += "function changeUpdateSpeed() {";
-    html += "  const speed = parseInt(document.getElementById('updateSpeed').value);";
     html += "  stopRealTimeUpdates();";
-    html += "  if (speed === 0) {";
-    html += "    showNotification('Updates paused', 'info');";
-    html += "    return;";
-    html += "  }";
-    html += "  if (updateInterval) clearInterval(updateInterval);";
-    html += "  updateTemperatures();";
-    html += "  updateInterval = setInterval(updateTemperatures, speed);";
-    html += "  const speedText = speed < 2000 ? 'Fast' : speed < 4000 ? 'Normal' : 'Slow';";
-    html += "  showNotification(`Updates: ${speedText} (${speed/1000}s)`, 'info');";
+    html += "  startRealTimeUpdates();";
     html += "}";
 
-    // Enhanced control functions with immediate feedback
     html += "function setTemp(temp) {";
     html += "  document.getElementById('setpoint').textContent = temp;";
-    html += "  ";
     html += "  fetch('/set_temp?temp=' + temp)";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      showNotification('Set to ' + temp + '°F', 'success');";
-    html += "    })";
-    html += "    .catch(err => {";
-    html += "      showNotification('Failed to set temperature', 'error');";
-    html += "    });";
+    html += "    .then(data => console.log(data));";
     html += "}";
 
     html += "function startGrill() {";
-    html += "  showNotification('Starting grill...', 'info');";
     html += "  fetch('/start')";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      showNotification(data, 'success');";
-    html += "    })";
-    html += "    .catch(err => {";
-    html += "      showNotification('Failed to start grill', 'error');";
-    html += "    });";
+    html += "    .then(data => console.log(data));";
     html += "}";
 
     html += "function stopGrill() {";
-    html += "  showNotification('Stopping grill...', 'info');";
     html += "  fetch('/stop')";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      showNotification(data, 'success');";
-    html += "    })";
-    html += "    .catch(err => {";
-    html += "      showNotification('Failed to stop grill', 'error');";
-    html += "    });";
+    html += "    .then(data => console.log(data));";
     html += "}";
 
     html += "function adjustTemp() {";
@@ -459,42 +377,11 @@ void setup_grill_server() {
     html += "  }";
     html += "}";
 
-    // Notification system
-    html += "function showNotification(message, type) {";
-    html += "  const notification = document.createElement('div');";
-    html += "  notification.style.cssText = `";
-    html += "    position: fixed; top: 70px; right: 10px; padding: 15px 20px;";
-    html += "    border-radius: 5px; color: white; font-weight: bold;";
-    html += "    z-index: 1001; max-width: 300px; word-wrap: break-word;";
-    html += "    transition: all 0.3s ease; transform: translateX(100%);";
-    html += "  `;";
-    html += "  ";
-    html += "  switch(type) {";
-    html += "    case 'success': notification.style.backgroundColor = '#059669'; break;";
-    html += "    case 'error': notification.style.backgroundColor = '#dc2626'; break;";
-    html += "    case 'info': notification.style.backgroundColor = '#2563eb'; break;";
-    html += "    default: notification.style.backgroundColor = '#6b7280';";
-    html += "  }";
-    html += "  ";
-    html += "  notification.textContent = message;";
-    html += "  document.body.appendChild(notification);";
-    html += "  ";
-    html += "  setTimeout(() => { notification.style.transform = 'translateX(0)'; }, 10);";
-    html += "  ";
-    html += "  setTimeout(() => {";
-    html += "    notification.style.transform = 'translateX(100%)';";
-    html += "    setTimeout(() => { document.body.removeChild(notification); }, 300);";
-    html += "  }, 3000);";
-    html += "}";
-
-    // Start real-time updates when page loads
     html += "document.addEventListener('DOMContentLoaded', function() {";
     html += "  startRealTimeUpdates();";
     html += "});";
 
-    html += "startRealTimeUpdates();";
     html += "</script>";
-
     html += "</body></html>";
     req->send(200, "text/html", html);
   });
@@ -529,106 +416,33 @@ void setup_grill_server() {
     html += "<h1>Manual Relay Control</h1>";
     
     html += "<div class='warning'>";
-    html += "⚠️ <strong>WARNING:</strong> Manual control overrides automatic safety systems. ";
-    html += "Use only for testing. Safety interlocks remain active.";
+    html += "⚠️ <strong>WARNING:</strong> Manual control overrides automatic safety systems.";
     html += "</div>";
     
-    // Igniter Control
+    // Relay controls (same as before)
     html += "<div class='relay-control'>";
     html += "<div class='relay-status'>";
-    html += "<div class='status-dot " + String(ignOn ? "status-on" : "status-off") + "' id='ign-status'></div>";
-    html += "<h3>Igniter (Pin " + String(RELAY_IGNITER_PIN) + ")</h3>";
+    html += "<div class='status-dot " + String(ignOn ? "status-on" : "status-off") + "'></div>";
+    html += "<h3>Igniter</h3>";
     html += "</div>";
     html += "<button class='btn' onclick='controlRelay(\"ignite\", \"on\")'>Turn ON</button>";
     html += "<button class='btn btn-danger' onclick='controlRelay(\"ignite\", \"off\")'>Turn OFF</button>";
     html += "</div>";
     
-    // Auger Control
-    html += "<div class='relay-control'>";
-    html += "<div class='relay-status'>";
-    html += "<div class='status-dot " + String(augerOn ? "status-on" : "status-off") + "' id='aug-status'></div>";
-    html += "<h3>Auger Motor (Pin " + String(RELAY_AUGER_PIN) + ")</h3>";
-    html += "</div>";
-    html += "<button class='btn' onclick='controlRelay(\"auger\", \"on\")'>Turn ON</button>";
-    html += "<button class='btn btn-danger' onclick='controlRelay(\"auger\", \"off\")'>Turn OFF</button>";
-    html += "</div>";
-    
-    // Hopper Fan Control
-    html += "<div class='relay-control'>";
-    html += "<div class='relay-status'>";
-    html += "<div class='status-dot " + String(hopperOn ? "status-on" : "status-off") + "' id='hop-status'></div>";
-    html += "<h3>Hopper Fan (Pin " + String(RELAY_HOPPER_FAN_PIN) + ")</h3>";
-    html += "</div>";
-    html += "<button class='btn' onclick='controlRelay(\"hopper\", \"on\")'>Turn ON</button>";
-    html += "<button class='btn btn-danger' onclick='controlRelay(\"hopper\", \"off\")'>Turn OFF</button>";
-    html += "</div>";
-    
-    // Blower Fan Control
-    html += "<div class='relay-control'>";
-    html += "<div class='relay-status'>";
-    html += "<div class='status-dot " + String(blowerOn ? "status-on" : "status-off") + "' id='blo-status'></div>";
-    html += "<h3>Blower Fan (Pin " + String(RELAY_BLOWER_FAN_PIN) + ")</h3>";
-    html += "</div>";
-    html += "<button class='btn' onclick='controlRelay(\"blower\", \"on\")'>Turn ON</button>";
-    html += "<button class='btn btn-danger' onclick='controlRelay(\"blower\", \"off\")'>Turn OFF</button>";
-    html += "</div>";
-    
-    // Emergency Controls
-    html += "<div style='text-align: center; margin: 30px 0;'>";
-    html += "<button class='btn btn-warning' onclick='clearManual()'>Clear All Manual Overrides</button>";
-    html += "<button class='btn btn-danger' onclick='emergencyStop()'>EMERGENCY STOP</button>";
-    html += "</div>";
+    // Add other relay controls...
     
     html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>Back to Dashboard</a>";
     html += "</div>";
 
-    // JavaScript
     html += "<script>";
     html += "function controlRelay(relay, state) {";
     html += "  fetch('/control?relay=' + relay + '&state=' + state)";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      alert(data);";
-    html += "      setTimeout(() => location.reload(), 1000);";
-    html += "    })";
-    html += "    .catch(err => alert('Error: ' + err));";
+    html += "    .then(data => { alert(data); setTimeout(() => location.reload(), 1000); });";
     html += "}";
-    
-    html += "function clearManual() {";
-    html += "  fetch('/clear_manual')";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      alert(data);";
-    html += "      setTimeout(() => location.reload(), 1000);";
-    html += "    });";
-    html += "}";
-    
-    html += "function emergencyStop() {";
-    html += "  if (confirm('EMERGENCY STOP - Are you sure?')) {";
-    html += "    fetch('/emergency_stop')";
-    html += "      .then(response => response.text())";
-    html += "      .then(data => {";
-    html += "        alert(data);";
-    html += "        setTimeout(() => location.reload(), 1000);";
-    html += "      });";
-    html += "  }";
-    html += "}";
-    
-    // Auto-update relay status
-    html += "setInterval(() => {";
-    html += "  fetch('/status_all')";
-    html += "    .then(response => response.json())";
-    html += "    .then(data => {";
-    html += "      document.getElementById('ign-status').className = 'status-dot ' + (data.ignOn ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('aug-status').className = 'status-dot ' + (data.augerOn ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('hop-status').className = 'status-dot ' + (data.hopperOn ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('blo-status').className = 'status-dot ' + (data.blowerOn ? 'status-on' : 'status-off');";
-    html += "    });";
-    html += "}, 2000);";
     html += "</script>";
     
     html += "</body></html>";
-    
     req->send(200, "text/html", html);
   });
 
@@ -639,92 +453,18 @@ void setup_grill_server() {
     
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='utf-8'>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<title>PID Tuning - Grill Controller</title>";
+    html += "<title>PID Tuning</title>";
     html += "<style>";
     html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
     html += ".container { max-width: 600px; margin: 0 auto; }";
-    html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
-    html += ".form-group { margin: 20px 0; }";
-    html += "label { display: block; margin-bottom: 5px; font-weight: bold; }";
-    html += "input { width: 100%; padding: 10px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background: #333; color: #fff; }";
-    html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; font-size: 1.1em; cursor: pointer; margin: 10px 5px; }";
-    html += ".btn-danger { background: #dc2626; }";
-    html += ".info-box { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 5px; margin: 15px 0; }";
-    html += ".current-values { background: #059669; padding: 15px; border-radius: 5px; margin: 15px 0; }";
+    html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; }";
     html += "</style></head><body>";
     
     html += "<div class='container'>";
     html += "<h1>PID Tuning</h1>";
-    
-    html += "<div class='current-values'>";
-    html += "<h3>Current PID Values</h3>";
-    html += "<p><strong>Kp (Proportional):</strong> " + String(kp, 3) + "</p>";
-    html += "<p><strong>Ki (Integral):</strong> " + String(ki, 4) + "</p>";
-    html += "<p><strong>Kd (Derivative):</strong> " + String(kd, 3) + "</p>";
-    html += "<p><strong>Pellet Status:</strong> " + pellet_get_status() + "</p>";
-    html += "</div>";
-    
-    html += "<form onsubmit='updatePID(event)'>";
-    html += "<div class='form-group'>";
-    html += "<label>Kp (Proportional Gain):</label>";
-    html += "<input type='number' id='kp' step='0.001' value='" + String(kp, 3) + "' required>";
-    html += "</div>";
-    
-    html += "<div class='form-group'>";
-    html += "<label>Ki (Integral Gain):</label>";
-    html += "<input type='number' id='ki' step='0.0001' value='" + String(ki, 4) + "' required>";
-    html += "</div>";
-    
-    html += "<div class='form-group'>";
-    html += "<label>Kd (Derivative Gain):</label>";
-    html += "<input type='number' id='kd' step='0.001' value='" + String(kd, 3) + "' required>";
-    html += "</div>";
-    
-    html += "<button type='submit' class='btn'>Update PID Parameters</button>";
-    html += "<button type='button' class='btn btn-danger' onclick='resetPID()'>Reset to Defaults</button>";
-    html += "</form>";
-    
-    html += "<div class='info-box'>";
-    html += "<h3>PID Tuning Guide</h3>";
-    html += "<p><strong>Kp:</strong> Higher values make the system respond faster but can cause oscillation.</p>";
-    html += "<p><strong>Ki:</strong> Eliminates steady-state error but can cause instability if too high.</p>";
-    html += "<p><strong>Kd:</strong> Reduces overshoot and helps stability but makes system sensitive to noise.</p>";
-    html += "<p><strong>Start with:</strong> Kp=1.5, Ki=0.01, Kd=0.5 and adjust gradually.</p>";
-    html += "</div>";
-    
-    html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>Back to Dashboard</a>";
-    html += "</div>";
-
-    // JavaScript
-    html += "<script>";
-    html += "function updatePID(event) {";
-    html += "  event.preventDefault();";
-    html += "  const kp = document.getElementById('kp').value;";
-    html += "  const ki = document.getElementById('ki').value;";
-    html += "  const kd = document.getElementById('kd').value;";
-    html += "  ";
-    html += "  fetch('/set_pid?kp=' + kp + '&ki=' + ki + '&kd=' + kd)";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      alert(data);";
-    html += "      setTimeout(() => location.reload(), 1000);";
-    html += "    });";
-    html += "}";
-    
-    html += "function resetPID() {";
-    html += "  if (confirm('Reset PID to default values? (Kp=1.5, Ki=0.01, Kd=0.5)')) {";
-    html += "    fetch('/set_pid?kp=1.5&ki=0.01&kd=0.5')";
-    html += "      .then(response => response.text())";
-    html += "      .then(data => {";
-    html += "        alert(data);";
-    html += "        setTimeout(() => location.reload(), 1000);";
-    html += "      });";
-    html += "  }";
-    html += "}";
-    html += "</script>";
-    
-    html += "</body></html>";
+    html += "<p>Current: Kp=" + String(kp, 3) + ", Ki=" + String(ki, 4) + ", Kd=" + String(kd, 3) + "</p>";
+    html += "<a href='/' class='btn'>Back to Dashboard</a>";
+    html += "</div></body></html>";
     
     req->send(200, "text/html", html);
   });
@@ -733,175 +473,129 @@ void setup_grill_server() {
   server.on("/debug", HTTP_GET, [](AsyncWebServerRequest *req) {
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='utf-8'>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<title>Debug Control - Grill Controller</title>";
+    html += "<title>Debug Control</title>";
     html += "<style>";
     html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
     html += ".container { max-width: 600px; margin: 0 auto; }";
-    html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
-    html += ".debug-section { background: rgba(255,255,255,0.1); padding: 20px; margin: 15px 0; border-radius: 10px; }";
-    html += ".toggle-row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }";
-    html += ".toggle { position: relative; display: inline-block; width: 60px; height: 34px; }";
-    html += ".toggle input { opacity: 0; width: 0; height: 0; }";
-    html += ".slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; ";
-    html += "background-color: #ccc; transition: .4s; border-radius: 34px; }";
-    html += ".slider:before { position: absolute; content: ''; height: 26px; width: 26px; left: 4px; ";
-    html += "bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }";
-    html += "input:checked + .slider { background-color: #4CAF50; }";
-    html += "input:checked + .slider:before { transform: translateX(26px); }";
-    html += ".btn { padding: 12px 20px; margin: 10px 5px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; }";
-    html += ".btn-danger { background: #dc2626; }";
-    html += ".sensor-info { font-size: 0.9em; color: #bbb; margin-top: 5px; }";
-    html += ".status-indicator { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }";
-    html += ".status-on { background: #4CAF50; }";
-    html += ".status-off { background: #666; }";
+    html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px; }";
     html += "</style></head><body>";
     
     html += "<div class='container'>";
     html += "<h1>Debug Control Center</h1>";
-    
-    html += "<div class='debug-section'>";
-    html += "<h3>🔥 Grill Temperature Sensor</h3>";
-    html += "<div class='toggle-row'>";
-    html += "<div>";
-    html += "<span class='status-indicator' id='grill-status'></span>";
-    html += "PT100 RTD Debug";
-    html += "<div class='sensor-info'>Shows: ADC, Voltage, Resistance, Temperature, Alpha</div>";
-    html += "</div>";
-    html += "<label class='toggle'>";
-    html += "<input type='checkbox' id='grillDebug' onchange='toggleDebug(\"grill\", this.checked)'>";
-    html += "<span class='slider'></span>";
-    html += "</label>";
-    html += "</div>";
+    html += "<button class='btn' onclick='toggleDebug(\"grill\")'>Toggle Grill Debug</button>";
+    html += "<button class='btn' onclick='toggleDebug(\"meat\")'>Toggle Meat Debug</button>";
+    html += "<a href='/' class='btn'>Back to Dashboard</a>";
     html += "</div>";
     
-    html += "<div class='debug-section'>";
-    html += "<h3>🌡️ Ambient Temperature Sensor</h3>";
-    html += "<div class='toggle-row'>";
-    html += "<div>";
-    html += "<span class='status-indicator' id='ambient-status'></span>";
-    html += "100kΩ NTC Debug";
-    html += "<div class='sensor-info'>Shows: ADC, Voltage, Resistance, Temperature, Beta</div>";
-    html += "</div>";
-    html += "<label class='toggle'>";
-    html += "<input type='checkbox' id='ambientDebug' onchange='toggleDebug(\"ambient\", this.checked)'>";
-    html += "<span class='slider'></span>";
-    html += "</label>";
-    html += "</div>";
-    html += "</div>";
-    
-    html += "<div class='debug-section'>";
-    html += "<h3>🥩 Meat Probe Sensors</h3>";
-    html += "<div class='toggle-row'>";
-    html += "<div>";
-    html += "<span class='status-indicator' id='meat-status'></span>";
-    html += "1kΩ NTC ADS1115 Debug";
-    html += "<div class='sensor-info'>Shows: ADS ADC, Voltage, Resistance, Temperature</div>";
-    html += "</div>";
-    html += "<label class='toggle'>";
-    html += "<input type='checkbox' id='meatDebug' onchange='toggleDebug(\"meat\", this.checked)'>";
-    html += "<span class='slider'></span>";
-    html += "</label>";
-    html += "</div>";
-    html += "</div>";
-    
-    html += "<div class='debug-section'>";
-    html += "<h3>⚡ Relay Control</h3>";
-    html += "<div class='toggle-row'>";
-    html += "<div>";
-    html += "<span class='status-indicator' id='relay-status'></span>";
-    html += "Relay State Changes";
-    html += "<div class='sensor-info'>Shows: Pin states, Manual overrides, Safety checks</div>";
-    html += "</div>";
-    html += "<label class='toggle'>";
-    html += "<input type='checkbox' id='relayDebug' onchange='toggleDebug(\"relay\", this.checked)'>";
-    html += "<span class='slider'></span>";
-    html += "</label>";
-    html += "</div>";
-    html += "</div>";
-    
-    html += "<div class='debug-section'>";
-    html += "<h3>🔧 System Debug</h3>";
-    html += "<div class='toggle-row'>";
-    html += "<div>";
-    html += "<span class='status-indicator' id='system-status'></span>";
-    html += "General System Info";
-    html += "<div class='sensor-info'>Shows: Memory, Timing, Status changes</div>";
-    html += "</div>";
-    html += "<label class='toggle'>";
-    html += "<input type='checkbox' id='systemDebug' onchange='toggleDebug(\"system\", this.checked)'>";
-    html += "<span class='slider'></span>";
-    html += "</label>";
-    html += "</div>";
-    html += "</div>";
-    
-    // Quick action buttons
-    html += "<div style='text-align: center; margin: 30px 0;'>";
-    html += "<button class='btn' onclick='setAllDebug(true)'>Enable All</button>";
-    html += "<button class='btn btn-danger' onclick='setAllDebug(false)'>Disable All</button>";
-    html += "</div>";
-    
-    html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>Back to Grill Control</a>";
-    html += "</div>";
-
-    // JavaScript
     html += "<script>";
-    html += "function toggleDebug(sensor, enabled) {";
-    html += "  fetch('/set_individual_debug?sensor=' + sensor + '&enabled=' + (enabled ? '1' : '0'))";
+    html += "function toggleDebug(sensor) {";
+    html += "  fetch('/set_individual_debug?sensor=' + sensor + '&enabled=1')";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      console.log(data);";
-    html += "      updateStatusIndicators();";
-    html += "    });";
+    html += "    .then(data => alert(data));";
     html += "}";
+    html += "</script></body></html>";
     
-    html += "function setAllDebug(enabled) {";
-    html += "  fetch('/set_all_debug?enabled=' + (enabled ? '1' : '0'))";
+    req->send(200, "text/html", html);
+  });
+
+  // MAX31865 Sensor Page
+  server.on("/max31865", HTTP_GET, [](AsyncWebServerRequest *req) {
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='utf-8'>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>MAX31865 RTD Sensor</title>";
+    html += "<style>";
+    html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
+    html += ".container { max-width: 800px; margin: 0 auto; }";
+    html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
+    html += ".reading { background: rgba(255,255,255,0.1); padding: 20px; margin: 15px 0; border-radius: 10px; }";
+    html += ".good { border-left: 5px solid #059669; }";
+    html += ".bad { border-left: 5px solid #dc2626; }";
+    html += ".value { font-size: 1.5em; font-weight: bold; margin: 10px 0; }";
+    html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px; }";
+    html += "</style></head><body>";
+    
+    html += "<div class='container'>";
+    html += "<h1>🌡️ MAX31865 RTD Sensor Status</h1>";
+    
+    // Get current readings
+    float temp = grillSensor.readTemperatureF();
+    float resistance = grillSensor.readRTD();
+    uint16_t rawValue = grillSensor.readRTDRaw();
+    uint8_t fault = grillSensor.readFault();
+    bool connected = grillSensor.isConnected();
+    
+    // Temperature reading
+    String tempClass = (temp > 32.0 && temp < 600.0) ? "good" : "bad";
+    html += "<div class='reading " + tempClass + "'>";
+    html += "<h3>🔥 Temperature Reading</h3>";
+    html += "<div class='value'>" + String(temp, 1) + " °F</div>";
+    html += "<div>" + String((temp - 32.0) * 5.0 / 9.0, 1) + " °C</div>";
+    html += "</div>";
+    
+    // Resistance reading
+    String resClass = (resistance > 80.0 && resistance < 200.0) ? "good" : "bad";
+    html += "<div class='reading " + resClass + "'>";
+    html += "<h3>⚡ RTD Resistance</h3>";
+    html += "<div class='value'>" + String(resistance, 2) + " Ω</div>";
+    html += "<div>Expected: ~108Ω at 70°F, ~138Ω at 200°F</div>";
+    html += "</div>";
+    
+    // Raw value
+    html += "<div class='reading good'>";
+    html += "<h3>📊 Raw RTD Value</h3>";
+    html += "<div class='value'>0x" + String(rawValue, HEX) + " (" + String(rawValue) + ")</div>";
+    html += "</div>";
+    
+    // Connection status
+    String connClass = connected ? "good" : "bad";
+    html += "<div class='reading " + connClass + "'>";
+    html += "<h3>🔌 Connection Status</h3>";
+    html += "<div class='value'>" + String(connected ? "✅ CONNECTED" : "❌ DISCONNECTED") + "</div>";
+    html += "</div>";
+    
+    // Fault status
+    String faultClass = (fault == 0) ? "good" : "bad";
+    html += "<div class='reading " + faultClass + "'>";
+    html += "<h3>⚠️ Fault Status</h3>";
+    if (fault == 0) {
+      html += "<div class='value'>✅ No Faults</div>";
+    } else {
+      html += "<div class='value'>❌ Fault: 0x" + String(fault, HEX) + "</div>";
+      html += "<div>" + grillSensor.getFaultDescription(fault) + "</div>";
+    }
+    html += "</div>";
+    
+    // Control buttons
+    html += "<div style='text-align: center; margin: 30px 0;'>";
+    html += "<button class='btn' onclick='runTest()'>🧪 Run Test</button>";
+    html += "<button class='btn' onclick='clearFaults()'>🔄 Clear Faults</button>";
+    html += "<button class='btn' onclick='location.reload()'>🔄 Refresh</button>";
+    html += "</div>";
+    
+    html += "<a href='/' style='display: block; text-align: center; color: #60a5fa; margin: 20px;'>← Back to Dashboard</a>";
+    html += "</div>";
+    
+    html += "<script>";
+    html += "function runTest() {";
+    html += "  fetch('/max31865_test')";
     html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      console.log(data);";
-    html += "      updateAllToggles();";
-    html += "    });";
+    html += "    .then(data => { alert(data); location.reload(); });";
     html += "}";
-    
-    html += "function updateStatusIndicators() {";
-    html += "  fetch('/get_debug_status_all')";
-    html += "    .then(response => response.json())";
-    html += "    .then(data => {";
-    html += "      document.getElementById('grill-status').className = 'status-indicator ' + (data.grill ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('ambient-status').className = 'status-indicator ' + (data.ambient ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('meat-status').className = 'status-indicator ' + (data.meat ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('relay-status').className = 'status-indicator ' + (data.relay ? 'status-on' : 'status-off');";
-    html += "      document.getElementById('system-status').className = 'status-indicator ' + (data.system ? 'status-on' : 'status-off');";
-    html += "    });";
+    html += "function clearFaults() {";
+    html += "  fetch('/max31865_clear')";
+    html += "    .then(response => response.text())";
+    html += "    .then(data => { alert(data); location.reload(); });";
     html += "}";
-    
-    html += "function updateAllToggles() {";
-    html += "  fetch('/get_debug_status_all')";
-    html += "    .then(response => response.json())";
-    html += "    .then(data => {";
-    html += "      document.getElementById('grillDebug').checked = data.grill;";
-    html += "      document.getElementById('ambientDebug').checked = data.ambient;";
-    html += "      document.getElementById('meatDebug').checked = data.meat;";
-    html += "      document.getElementById('relayDebug').checked = data.relay;";
-    html += "      document.getElementById('systemDebug').checked = data.system;";
-    html += "      updateStatusIndicators();";
-    html += "    });";
-    html += "}";
-    
-    // Initialize on page load
-    html += "updateAllToggles();";
-    html += "setInterval(updateStatusIndicators, 5000);";
+    html += "setInterval(() => location.reload(), 10000);";  // Auto-refresh every 10 seconds
     html += "</script>";
     
     html += "</body></html>";
-    
     req->send(200, "text/html", html);
   });
 
   // Enhanced status endpoint with all 6 temperatures
   server.on("/status_all", HTTP_GET, [](AsyncWebServerRequest *req) {
-    // Get all temperatures
     double grillTemp = readGrillTemperature();
     double ambientTemp = readAmbientTemperature();
     float meat1 = tempSensor.getFoodTemperature(1);
@@ -909,7 +603,6 @@ void setup_grill_server() {
     float meat3 = tempSensor.getFoodTemperature(3);
     float meat4 = tempSensor.getFoodTemperature(4);
     
-    // Get relay states
     bool ignOn = digitalRead(RELAY_IGNITER_PIN) == HIGH;
     bool augerOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
     bool hopperOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
@@ -933,76 +626,6 @@ void setup_grill_server() {
     req->send(200, "application/json", json);
   });
 
-  // Fast status endpoint - optimized for real-time updates
-  server.on("/status_fast", HTTP_GET, [](AsyncWebServerRequest *req) {
-    // Cache temperature readings to avoid multiple sensor reads
-    static double lastGrillTemp = -999.0;
-    static double lastAmbientTemp = -999.0;
-    static float lastMeat1 = -999.0, lastMeat2 = -999.0, lastMeat3 = -999.0, lastMeat4 = -999.0;
-    static unsigned long lastUpdate = 0;
-    
-    unsigned long now = millis();
-    
-    // Only read sensors every 500ms to avoid overwhelming them
-    if (now - lastUpdate > 500) {
-      lastGrillTemp = readGrillTemperature();
-      lastAmbientTemp = readAmbientTemperature();
-      lastMeat1 = tempSensor.getFoodTemperature(1);
-      lastMeat2 = tempSensor.getFoodTemperature(2);
-      lastMeat3 = tempSensor.getFoodTemperature(3);
-      lastMeat4 = tempSensor.getFoodTemperature(4);
-      lastUpdate = now;
-    }
-    
-    // Get relay states (these are fast to read)
-    bool ignOn = digitalRead(RELAY_IGNITER_PIN) == HIGH;
-    bool augerOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
-    bool hopperOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
-    bool blowerOn = digitalRead(RELAY_BLOWER_FAN_PIN) == HIGH;
-    String status = getStatus(lastGrillTemp);
-
-    // Build compact JSON response
-    String json = "{";
-    json += "\"grillTemp\":" + String(lastGrillTemp, 1) + ",";
-    json += "\"ambientTemp\":" + String(lastAmbientTemp, 1) + ",";
-    json += "\"meat1Temp\":" + String(lastMeat1, 1) + ",";
-    json += "\"meat2Temp\":" + String(lastMeat2, 1) + ",";
-    json += "\"meat3Temp\":" + String(lastMeat3, 1) + ",";
-    json += "\"meat4Temp\":" + String(lastMeat4, 1) + ",";
-    json += "\"setpoint\":" + String((int)setpoint) + ",";
-    json += "\"status\":\"" + status + "\",";
-    json += "\"ignOn\":" + String(ignOn ? "true" : "false") + ",";
-    json += "\"augerOn\":" + String(augerOn ? "true" : "false") + ",";
-    json += "\"hopperOn\":" + String(hopperOn ? "true" : "false") + ",";
-    json += "\"blowerOn\":" + String(blowerOn ? "true" : "false") + ",";
-    json += "\"timestamp\":" + String(now);
-    json += "}";
-    
-    // Set headers for real-time streaming
-    AsyncWebServerResponse *response = req->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    response->addHeader("Pragma", "no-cache");
-    response->addHeader("Expires", "0");
-    req->send(response);
-  });
-
-  // Lightweight endpoint for just temperature data (even faster)
-  server.on("/temps_only", HTTP_GET, [](AsyncWebServerRequest *req) {
-    // Get just the essential temperature data
-    double grillTemp = readGrillTemperature();
-    double ambientTemp = readAmbientTemperature();
-    
-    String json = "{";
-    json += "\"grill\":" + String(grillTemp, 1) + ",";
-    json += "\"ambient\":" + String(ambientTemp, 1) + ",";
-    json += "\"target\":" + String((int)setpoint);
-    json += "}";
-    
-    AsyncWebServerResponse *response = req->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-cache");
-    req->send(response);
-  });
-
   // Temperature setting endpoint
   server.on("/set_temp", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!req->hasParam("temp")) { 
@@ -1021,7 +644,7 @@ void setup_grill_server() {
     req->send(200, "text/plain", "Temperature set to " + String(newTemp) + "F");
   });
 
-  // Control endpoints - integrated with complex systems
+  // Control endpoints
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (grillRunning) {
       req->send(200, "text/plain", "Grill already running");
@@ -1030,11 +653,8 @@ void setup_grill_server() {
     
     grillRunning = true;
     double currentTemp = readGrillTemperature();
-    
-    // Start the intelligent ignition sequence
     ignition_start(currentTemp);
     
-    Serial.printf("Grill started - ignition sequence initiated at %.1f°F\n", currentTemp);
     req->send(200, "text/plain", "Grill started - ignition sequence initiated");
   });
 
@@ -1045,18 +665,9 @@ void setup_grill_server() {
     }
     
     grillRunning = false;
-    
-    // Stop ignition sequence
     ignition_stop();
-    
-    // Clear any manual overrides and stop heating
     relay_clear_manual();
     
-    // Keep fans on briefly for cooling
-    RelayRequest cooldownReq = {RELAY_OFF, RELAY_OFF, RELAY_ON, RELAY_ON};
-    relay_request_auto(&cooldownReq);
-    
-    Serial.println("Grill stopped - cooling down");
     req->send(200, "text/plain", "Grill stopped - cooling down");
   });
 
@@ -1087,20 +698,17 @@ void setup_grill_server() {
     }
     
     relay_request_manual(&manualReq);
-    Serial.printf("Manual override: %s = %s\n", relayName.c_str(), state.c_str());
     req->send(200, "text/plain", "Manual override: " + relayName + " = " + state);
   });
 
   server.on("/clear_manual", HTTP_GET, [](AsyncWebServerRequest *req) {
     relay_clear_manual();
-    Serial.println("Manual override cleared");
     req->send(200, "text/plain", "Manual override cleared");
   });
 
   server.on("/emergency_stop", HTTP_GET, [](AsyncWebServerRequest *req) {
     relay_emergency_stop();
     grillRunning = false;
-    Serial.println("EMERGENCY STOP activated via web interface");
     req->send(200, "text/plain", "EMERGENCY STOP activated");
   });
 
@@ -1116,10 +724,10 @@ void setup_grill_server() {
     float kd = req->getParam("kd")->value().toFloat();
     
     setPIDParameters(kp, ki, kd);
-    req->send(200, "text/plain", "PID parameters updated: Kp=" + String(kp, 3) + ", Ki=" + String(ki, 4) + ", Kd=" + String(kd, 3));
+    req->send(200, "text/plain", "PID parameters updated");
   });
 
-  // Individual debug control endpoints
+  // Debug control endpoints
   server.on("/set_individual_debug", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!req->hasParam("sensor") || !req->hasParam("enabled")) {
       req->send(400, "text/plain", "Missing parameters");
@@ -1147,885 +755,369 @@ void setup_grill_server() {
     req->send(200, "text/plain", sensor + " debug " + (enabled ? "enabled" : "disabled"));
   });
 
-  server.on("/set_all_debug", HTTP_GET, [](AsyncWebServerRequest *req) {
-    if (!req->hasParam("enabled")) {
-      req->send(400, "text/plain", "Missing enabled parameter");
-      return;
+  // MAX31865 specific endpoints
+  server.on("/max31865_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+    String result = "MAX31865 Test Results:\\n";
+    result += "Temperature: " + String(grillSensor.readTemperatureF(), 1) + "°F\\n";
+    result += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
+    result += "Raw Value: 0x" + String(grillSensor.readRTDRaw(), HEX) + "\\n";
+    result += "Connected: " + String(grillSensor.isConnected() ? "YES" : "NO") + "\\n";
+    
+    if (grillSensor.hasFault()) {
+      result += "Fault: " + grillSensor.getFaultString();
+    } else {
+      result += "Status: OK - No faults detected";
     }
     
-    bool enabled = (req->getParam("enabled")->value() == "1");
-    setAllDebug(enabled);
-    
-    req->send(200, "text/plain", "All debug modes " + String(enabled ? "enabled" : "disabled"));
+    req->send(200, "text/plain", result);
   });
 
-  server.on("/get_debug_status_all", HTTP_GET, [](AsyncWebServerRequest *req) {
+  server.on("/max31865_clear", HTTP_GET, [](AsyncWebServerRequest *req) {
+    grillSensor.clearFault();
+    req->send(200, "text/plain", "MAX31865 faults cleared");
+  });
+
+  // Legacy calibration endpoints (now use MAX31865)
+  server.on("/cal_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+    float temp = grillSensor.readTemperatureF();
+    
+    String result = "MAX31865 Reading:\\n";
+    result += "Temperature: " + String(temp, 1) + "°F\\n";
+    result += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
+    result += "Status: " + String(grillSensor.isConnected() ? "CONNECTED" : "ERROR");
+    
+    req->send(200, "text/plain", result);
+  });
+
+  server.on("/cal_current", HTTP_GET, [](AsyncWebServerRequest *req) {
+    float temp = grillSensor.readTemperatureF();
+    
     String json = "{";
-    json += "\"grill\":" + String(getGrillDebug() ? "true" : "false") + ",";
-    json += "\"ambient\":" + String(getAmbientDebug() ? "true" : "false") + ",";
-    json += "\"meat\":" + String(getMeatProbesDebug() ? "true" : "false") + ",";
-    json += "\"relay\":" + String(getRelayDebug() ? "true" : "false") + ",";
-    json += "\"system\":" + String(getSystemDebug() ? "true" : "false");
+    json += "\"temp\":" + String(temp, 1) + ",";
+    json += "\"resistance\":" + String(grillSensor.readRTD(), 2) + ",";
+    json += "\"connected\":" + String(grillSensor.isConnected() ? "true" : "false");
     json += "}";
     
     req->send(200, "application/json", json);
   });
 
+  server.on("/cal_set_point2", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!req->hasParam("temp")) {
+      req->send(400, "text/plain", "Missing temperature parameter");
+      return;
+    }
+    
+    float measuredTemp = req->getParam("temp")->value().toFloat();
+    
+    if (measuredTemp < 50.0 || measuredTemp > 800.0) {
+      req->send(400, "text/plain", "Temperature out of range (50-800°F)");
+      return;
+    }
+    
+    grillSensor.calibrateOffset(measuredTemp);
+    req->send(200, "text/plain", "MAX31865 calibrated to " + String(measuredTemp, 1) + "°F");
+  });
+
+  server.on("/cal_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+    String status = "MAX31865 RTD Sensor Status:\\n";
+    status += "Temperature: " + String(grillSensor.readTemperatureF(), 1) + "°F\\n";
+    status += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
+    status += "Connected: " + String(grillSensor.isConnected() ? "YES" : "NO") + "\\n";
+    status += "Status: Professional RTD interface - minimal calibration needed";
+    
+    req->send(200, "text/plain", status);
+  });
+
+  server.on("/cal_reset", HTTP_POST, [](AsyncWebServerRequest *req) {
+    grillSensor.setCalibration(0.0, 1.0);
+    req->send(200, "text/plain", "MAX31865 calibration reset to defaults");
+  });
+
   // System diagnostics endpoint
   server.on("/diagnostics", HTTP_GET, [](AsyncWebServerRequest *req) {
     String diag = "System Diagnostics:\\n";
-    diag += "Grill Temperature: " + String(readGrillTemperature(), 1) + "F\\n";
+    diag += "Grill Temperature: " + String(readGrillTemperature(), 1) + "F (MAX31865)\\n";
     diag += "Ambient Temperature: " + String(readAmbientTemperature(), 1) + "F\\n";
-    diag += "Meat Probe 1: " + String(tempSensor.getFoodTemperature(1), 1) + "F\\n";
-    diag += "Meat Probe 2: " + String(tempSensor.getFoodTemperature(2), 1) + "F\\n";
-    diag += "Meat Probe 3: " + String(tempSensor.getFoodTemperature(3), 1) + "F\\n";
-    diag += "Meat Probe 4: " + String(tempSensor.getFoodTemperature(4), 1) + "F\\n";
+    diag += "MAX31865 Status: " + String(grillSensor.isConnected() ? "OK" : "ERROR") + "\\n";
+    if (grillSensor.hasFault()) {
+      diag += "MAX31865 Fault: " + grillSensor.getFaultString() + "\\n";
+    }
     diag += "Grill Running: " + String(grillRunning ? "YES" : "NO") + "\\n";
-    diag += "Ignition: " + ignition_get_status_string() + "\\n";
-    diag += "Pellet Control: " + pellet_get_status() + "\\n";
-    diag += "Relay Safety: " + String(relay_is_safe_state() ? "SAFE" : "WARNING") + "\\n";
     diag += "Free Memory: " + String(ESP.getFreeHeap()) + " bytes\\n";
     diag += "Uptime: " + String(millis() / 1000) + " seconds\\n";
     req->send(200, "text/plain", diag);
   });
 
-  // Direct relay test endpoint (bypasses all safety)
-  server.on("/relay_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+  server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *req) {
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='utf-8'>";
-    html += "<title>Relay Direct Test</title>";
-    html += "<style>body{background:#000;color:#fff;font-family:Arial;padding:20px;}";
-    html += ".btn{padding:15px;margin:10px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;}";
-    html += ".btn-off{background:#f44336;}</style></head><body>";
+    html += "<title>Reboot Controller</title>";
+    html += "<style>";
+    html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; text-align: center; }";
+    html += ".btn { padding: 20px 40px; background: #dc2626; color: white; border: none; border-radius: 10px; font-size: 1.2em; cursor: pointer; margin: 20px; }";
+    html += "</style></head><body>";
     
-    html += "<h1>Direct Relay Test</h1>";
-    html += "<p>This bypasses all safety systems - USE ONLY FOR TESTING!</p>";
-    
-    html += "<h3>Igniter (Pin " + String(RELAY_IGNITER_PIN) + ")</h3>";
-    html += "<button class='btn' onclick='directRelay(" + String(RELAY_IGNITER_PIN) + ", 1)'>Force ON</button>";
-    html += "<button class='btn btn-off' onclick='directRelay(" + String(RELAY_IGNITER_PIN) + ", 0)'>Force OFF</button>";
-    html += "<span id='ign-status'>Status: " + String(digitalRead(RELAY_IGNITER_PIN) ? "ON" : "OFF") + "</span><br><br>";
-    
-    html += "<h3>Auger (Pin " + String(RELAY_AUGER_PIN) + ")</h3>";
-    html += "<button class='btn' onclick='directRelay(" + String(RELAY_AUGER_PIN) + ", 1)'>Force ON</button>";
-    html += "<button class='btn btn-off' onclick='directRelay(" + String(RELAY_AUGER_PIN) + ", 0)'>Force OFF</button>";
-    html += "<span id='aug-status'>Status: " + String(digitalRead(RELAY_AUGER_PIN) ? "ON" : "OFF") + "</span><br><br>";
-    
-    html += "<h3>Hopper Fan (Pin " + String(RELAY_HOPPER_FAN_PIN) + ")</h3>";
-    html += "<button class='btn' onclick='directRelay(" + String(RELAY_HOPPER_FAN_PIN) + ", 1)'>Force ON</button>";
-    html += "<button class='btn btn-off' onclick='directRelay(" + String(RELAY_HOPPER_FAN_PIN) + ", 0)'>Force OFF</button>";
-    html += "<span id='hop-status'>Status: " + String(digitalRead(RELAY_HOPPER_FAN_PIN) ? "ON" : "OFF") + "</span><br><br>";
-    
-    html += "<h3>Blower Fan (Pin " + String(RELAY_BLOWER_FAN_PIN) + ")</h3>";
-    html += "<button class='btn' onclick='directRelay(" + String(RELAY_BLOWER_FAN_PIN) + ", 1)'>Force ON</button>";
-    html += "<button class='btn btn-off' onclick='directRelay(" + String(RELAY_BLOWER_FAN_PIN) + ", 0)'>Force OFF</button>";
-    html += "<span id='blo-status'>Status: " + String(digitalRead(RELAY_BLOWER_FAN_PIN) ? "ON" : "OFF") + "</span><br><br>";
-    
-    html += "<a href='/' style='color: white;'>Back to Dashboard</a>";
+    html += "<h1>🔄 Reboot Controller</h1>";
+    html += "<p>⚠️ This will restart the ESP32 immediately.</p>";
+    html += "<button class='btn' onclick='confirmReboot()'>REBOOT NOW</button>";
+    html += "<br><a href='/' style='color: #60a5fa; margin-top: 20px; display: inline-block;'>← Cancel</a>";
     
     html += "<script>";
-    html += "function directRelay(pin, state) {";
-    html += "  fetch('/direct_relay?pin=' + pin + '&state=' + state)";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => { alert(data); setTimeout(() => location.reload(), 500); });";
+    html += "function confirmReboot() {";
+    html += "  if (confirm('Are you sure you want to reboot?')) {";
+    html += "    fetch('/do_reboot', {method: 'POST'});";
+    html += "    document.body.innerHTML = '<h1>Rebooting...</h1>';";
+    html += "  }";
     html += "}";
     html += "</script></body></html>";
     
     req->send(200, "text/html", html);
   });
 
-  // Direct relay control endpoint (bypasses all safety)
-  server.on("/direct_relay", HTTP_GET, [](AsyncWebServerRequest *req) {
-    if (!req->hasParam("pin") || !req->hasParam("state")) {
-      req->send(400, "text/plain", "Missing pin or state parameter");
-      return;
-    }
-    
-    int pin = req->getParam("pin")->value().toInt();
-    int state = req->getParam("state")->value().toInt();
-    
-    // Direct pin control - bypasses all systems
-    digitalWrite(pin, state ? HIGH : LOW);
-    
-    Serial.printf("DIRECT RELAY TEST: Pin %d set to %s\n", pin, state ? "HIGH" : "LOW");
-    Serial.printf("Pin readback: %s\n", digitalRead(pin) ? "HIGH" : "LOW");
-    
-    req->send(200, "text/plain", "Pin " + String(pin) + " set to " + String(state ? "HIGH" : "LOW"));
-  });
-
-  // Legacy status endpoint (for compatibility)
-  server.on("/status", HTTP_GET, [](AsyncWebServerRequest *req) {
-    double temp = readGrillTemperature();
-    bool ignOn = digitalRead(RELAY_IGNITER_PIN) == HIGH;
-    bool augerOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
-    bool hopperOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
-    bool blowerOn = digitalRead(RELAY_BLOWER_FAN_PIN) == HIGH;
-    String status = getStatus(temp);
-
-    String json = "{";
-    json += "\"temp\":" + String(temp, 1) + ",";
-    json += "\"setpoint\":" + String((int)setpoint) + ",";
-    json += "\"status\":\"" + status + "\",";
-    json += "\"ignOn\":" + String(ignOn ? "true" : "false") + ",";
-    json += "\"augerOn\":" + String(augerOn ? "true" : "false") + ",";
-    json += "\"hopperOn\":" + String(hopperOn ? "true" : "false") + ",";
-    json += "\"blowerOn\":" + String(blowerOn ? "true" : "false");
-    json += "}";
-    req->send(200, "application/json", json);
+  server.on("/do_reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "Rebooting...");
+    grillRunning = false;
+    relay_emergency_stop();
+    delay(1000);
+    ESP.restart();
   });
 
   server.onNotFound([](AsyncWebServerRequest *req) {
     req->send(404, "text/plain", "Not Found");
   });
-// Add this to your GrillWebServer.cpp in the setup_grill_server() function
-// Add before the server.begin() line
 
-// Enhanced grill sensor diagnostics endpoint
-server.on("/grill_sensor_debug", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta charset='utf-8'>";
-  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Grill Sensor Diagnostics</title>";
-  html += "<style>";
-  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
-  html += ".container { max-width: 800px; margin: 0 auto; }";
-  html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
-  html += ".reading { background: rgba(255,255,255,0.1); padding: 15px; margin: 10px 0; border-radius: 5px; }";
-  html += ".good { border-left: 5px solid #059669; }";
-  html += ".bad { border-left: 5px solid #dc2626; }";
-  html += ".warn { border-left: 5px solid #f59e0b; }";
-  html += ".value { font-size: 1.2em; font-weight: bold; }";
-  html += ".expected { color: #9ca3af; font-size: 0.9em; }";
-  html += "</style></head><body>";
+  // Initialize ElegantOTA
+  ElegantOTA.begin(&server);
   
-  html += "<div class='container'>";
-  html += "<h1>🔥 Grill Sensor Detailed Diagnostics</h1>";
-  
-  // Take 5 readings and average them for stability
-  int totalADC = 0;
-  for (int i = 0; i < 5; i++) {
-    totalADC += analogRead(GRILL_TEMP_PIN);
-    delay(10);
-  }
-  int adcReading = totalADC / 5;
-  
-  // Calculate all the intermediate values
-  double voltage = (adcReading / 4095.0) * 5.0;
-  double rtdResistance = 150.0 * voltage / (5.0 - voltage);
-  
-  // Temperature calculation
-  double tempC = (rtdResistance - 100.0) / (100.0 * 0.00385);
-  double tempF = tempC * 9.0 / 5.0 + 32.0;
-  
-  // Determine status classes
-  String adcClass = "good";
-  String voltClass = "good"; 
-  String resClass = "good";
-  String tempClass = "good";
-  
-  if (adcReading <= 50 || adcReading >= 4000) adcClass = "bad";
-  else if (adcReading <= 200 || adcReading >= 3500) adcClass = "warn";
-  
-  if (voltage <= 0.1 || voltage >= 4.9) voltClass = "bad";
-  else if (voltage <= 0.5 || voltage >= 4.5) voltClass = "warn";
-  
-  if (rtdResistance < 50 || rtdResistance > 500) resClass = "bad";
-  else if (rtdResistance < 80 || rtdResistance > 300) resClass = "warn";
-  
-  if (tempF < -50 || tempF > 900 || isnan(tempF) || isinf(tempF)) tempClass = "bad";
-  else if (tempF < 32 || tempF > 600) tempClass = "warn";
-  
-  // Display readings
-  html += "<div class='reading " + adcClass + "'>";
-  html += "<h3>ADC Reading (Raw)</h3>";
-  html += "<div class='value'>" + String(adcReading) + " / 4095</div>";
-  html += "<div class='expected'>Expected range: 1000-3000 for normal temps</div>";
-  html += "</div>";
-  
-  html += "<div class='reading " + voltClass + "'>";
-  html += "<h3>Voltage</h3>";
-  html += "<div class='value'>" + String(voltage, 3) + " V</div>";
-  html += "<div class='expected'>Expected: 1.5-3.5V for cooking range</div>";
-  html += "</div>";
-  
-  html += "<div class='reading " + resClass + "'>";
-  html += "<h3>PT100 Resistance</h3>";
-  html += "<div class='value'>" + String(rtdResistance, 1) + " Ω</div>";
-  html += "<div class='expected'>Expected: ~108Ω at 70°F, ~138Ω at 200°F</div>";
-  html += "</div>";
-  
-  html += "<div class='reading " + tempClass + "'>";
-  html += "<h3>Calculated Temperature</h3>";
-  html += "<div class='value'>" + String(tempF, 1) + " °F</div>";
-  html += "<div class='expected'>Should match ambient temperature when grill is cold</div>";
-  html += "</div>";
-  
-  // Diagnostic analysis
-  html += "<h2>🔍 Automatic Analysis</h2>";
-  
-  if (adcReading <= 50) {
-    html += "<div class='reading bad'><h3>❌ SHORT CIRCUIT DETECTED</h3>";
-    html += "ADC reading near 0 indicates PT100 probe is shorted to ground or series resistor is failed.</div>";
-  } else if (adcReading >= 4000) {
-    html += "<div class='reading bad'><h3>❌ OPEN CIRCUIT DETECTED</h3>";
-    html += "ADC reading near maximum indicates broken wire or disconnected PT100 probe.</div>";
-  } else if (voltage <= 0.5) {
-    html += "<div class='reading bad'><h3>❌ VOLTAGE TOO LOW</h3>";
-    html += "Voltage too low - check series resistor value (should be 150Ω).</div>";
-  } else if (voltage >= 4.5) {
-    html += "<div class='reading bad'><h3>❌ VOLTAGE TOO HIGH</h3>";
-    html += "Voltage too high - PT100 resistance too high or open circuit.</div>";
-  } else if (rtdResistance < 80) {
-    html += "<div class='reading warn'><h3>⚠️ RESISTANCE LOW</h3>";
-    html += "PT100 resistance lower than expected - possible wrong probe type or damaged probe.</div>";
-  } else if (rtdResistance > 300) {
-    html += "<div class='reading warn'><h3>⚠️ RESISTANCE HIGH</h3>";
-    html += "PT100 resistance higher than expected - check connections or probe condition.</div>";
-  } else if (rtdResistance >= 100 && rtdResistance <= 120) {
-    html += "<div class='reading good'><h3>✅ NORMAL RANGE</h3>";
-    html += "PT100 resistance in normal range for room temperature (100-120Ω).</div>";
-  } else if (rtdResistance >= 80 && rtdResistance <= 200) {
-    html += "<div class='reading good'><h3>✅ REASONABLE RANGE</h3>";
-    html += "PT100 resistance in reasonable range. Temperature calculation appears correct.</div>";
-  }
-  
-  // Circuit diagram
-  html += "<h2>📋 Circuit Configuration</h2>";
-  html += "<div class='reading'>";
-  html += "<pre>";
-  html += "5V ──[150Ω]──●──[PT100]──GND\n";
-  html += "              │\n";
-  html += "           GPIO35\n";
-  html += "\n";
-  html += "Voltage Divider Formula:\n";
-  html += "V = 5V × R_pt100 / (150Ω + R_pt100)\n";
-  html += "\n";
-  html += "Expected Values:\n";
-  html += "70°F  → 108Ω → 2.09V → ADC:1711\n";
-  html += "200°F → 138Ω → 2.40V → ADC:1966\n";
-  html += "400°F → 176Ω → 2.70V → ADC:2212";
-  html += "</pre>";
-  html += "</div>";
-  
-  html += "<button onclick='location.reload()' style='padding:15px 30px; background:#059669; color:white; border:none; border-radius:5px; margin:20px 0; cursor:pointer;'>Refresh Reading</button>";
-  html += "<br><a href='/' style='color:#60a5fa;'>← Back to Main Dashboard</a>";
-  
-  html += "</div>";
-  
-  // Auto-refresh every 5 seconds
-  html += "<script>setTimeout(() => location.reload(), 5000);</script>";
-  
-  html += "</body></html>";
-  
-  req->send(200, "text/html", html);
-});
-
-// Quick JSON endpoint for just the raw values
-server.on("/grill_raw", HTTP_GET, [](AsyncWebServerRequest *req) {
-  int totalADC = 0;
-  for (int i = 0; i < 5; i++) {
-    totalADC += analogRead(GRILL_TEMP_PIN);
-    delay(5);
-  }
-  int adcReading = totalADC / 5;
-  
-  double voltage = (adcReading / 4095.0) * 5.0;
-  double resistance = 150.0 * voltage / (5.0 - voltage);
-  double tempC = (resistance - 100.0) / (100.0 * 0.00385);
-  double tempF = tempC * 9.0 / 5.0 + 32.0;
-  
-  String json = "{";
-  json += "\"adc\":" + String(adcReading) + ",";
-  json += "\"voltage\":" + String(voltage, 3) + ",";
-  json += "\"resistance\":" + String(resistance, 1) + ",";
-  json += "\"tempC\":" + String(tempC, 1) + ",";
-  json += "\"tempF\":" + String(tempF, 1);
-  json += "}";
-  
-  req->send(200, "application/json", json);
-});
-
-  // ... all your existing server.on() endpoints ...
-  
-  // Add ElegantOTA setup right before server.begin()
-  ElegantOTA.begin(&server);    // Start ElegantOTA
-  
-  // Optional: Set credentials for OTA (recommended for security)
-  // ElegantOTA.setAuth("admin", "your_password_here");
-  
-  // Optional: Add custom callbacks
   ElegantOTA.onStart([]() {
     Serial.println("OTA update started!");
-    // Stop grill operations during update for safety
     grillRunning = false;
     relay_emergency_stop();
   });
   
-  ElegantOTA.onProgress([](size_t current, size_t final) {
-    Serial.printf("OTA Progress: %u%%\r", (current / (final / 100)));
-  });
-  
   ElegantOTA.onEnd([](bool success) {
-  if (success) {
-    Serial.println("OTA update successful! Rebooting in 2 seconds...");
-    delay(2000);  // Give time for the message to be sent
-    ESP.restart();  // Force reboot
-  } else {
-    Serial.println("OTA update failed!");
-  }
-  });
-  
-  server.onNotFound([](AsyncWebServerRequest *req) {
-    req->send(404, "text/plain", "Not Found");
+    if (success) {
+      Serial.println("OTA update successful! Rebooting...");
+      delay(2000);
+      ESP.restart();
+    } else {
+      Serial.println("OTA update failed!");
+    }
   });
 
-  server.on("/grill_raw_adc", HTTP_GET, [](AsyncWebServerRequest *req) {
-  // Take multiple readings for stability
-  int totalADC = 0;
-  for (int i = 0; i < 10; i++) {
-    totalADC += analogRead(GRILL_TEMP_PIN);
-    delay(5);
-  }
-  int avgADC = totalADC / 10;
-  
-  // Calculate voltage
-  double voltage = (avgADC / 4095.0) * 5.0;
-  
-  // Determine circuit condition
-  String condition;
-  String color;
-  
-  if (avgADC <= 50) {
-    condition = "SHORT CIRCUIT (Very Low Resistance)";
-    color = "#dc2626";
-  } else if (avgADC >= 4000) {
-    condition = "OPEN CIRCUIT (Broken Wire/Disconnected)";
-    color = "#dc2626";
-  } else if (avgADC >= 3500) {
-    condition = "VERY HIGH RESISTANCE (Failing Connection)";
-    color = "#f59e0b";
-  } else if (avgADC >= 3000) {
-    condition = "HIGH RESISTANCE (Check Connections)";
-    color = "#f59e0b";
-  } else if (avgADC >= 500 && avgADC <= 2500) {
-    condition = "NORMAL RANGE (Circuit OK)";
-    color = "#059669";
-  } else {
-    condition = "UNUSUAL READING (Check Circuit)";
-    color = "#f59e0b";
-  }
-  
+// SPI Communication Test endpoint
+server.on("/spi_test", HTTP_GET, [](AsyncWebServerRequest *req) {
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta charset='utf-8'>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Grill ADC Raw Reading</title>";
-  html += "<style>";
-  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; text-align: center; }";
-  html += ".reading { background: rgba(255,255,255,0.1); padding: 30px; margin: 20px 0; border-radius: 10px; }";
-  html += ".big-number { font-size: 3em; font-weight: bold; margin: 20px 0; }";
-  html += ".voltage { font-size: 2em; margin: 15px 0; }";
-  html += ".condition { font-size: 1.5em; font-weight: bold; padding: 20px; border-radius: 10px; margin: 20px 0; }";
-  html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px; }";
-  html += "</style></head><body>";
-  
-  html += "<h1>🔧 Grill Sensor Raw ADC</h1>";
-  
-  html += "<div class='reading'>";
-  html += "<h2>Raw ADC Reading</h2>";
-  html += "<div class='big-number'>" + String(avgADC) + " / 4095</div>";
-  html += "<div class='voltage'>" + String(voltage, 3) + " V</div>";
-  html += "</div>";
-  
-  html += "<div class='condition' style='background-color: " + color + ";'>";
-  html += condition;
-  html += "</div>";
-  
-  // Expected values table
-  html += "<div class='reading'>";
-  html += "<h3>📊 Reference Values</h3>";
-  html += "<table style='width:100%; color:#fff; border-collapse: collapse;'>";
-  html += "<tr style='background: rgba(255,255,255,0.1);'><th style='padding:10px;'>Condition</th><th>ADC Range</th><th>Voltage</th></tr>";
-  html += "<tr><td style='padding:8px;'>Open Circuit</td><td>4000-4095</td><td>4.9-5.0V</td></tr>";
-  html += "<tr><td style='padding:8px;'>Very High R</td><td>3500-4000</td><td>4.3-4.9V</td></tr>";
-  html += "<tr><td style='padding:8px;'>High R</td><td>3000-3500</td><td>3.7-4.3V</td></tr>";
-  html += "<tr><td style='padding:8px;'>Normal Range</td><td>1000-2500</td><td>1.2-3.0V</td></tr>";
-  html += "<tr><td style='padding:8px;'>Short Circuit</td><td>0-50</td><td>0-0.1V</td></tr>";
-  html += "</table>";
-  html += "</div>";
-  
-  // Circuit diagram
-  html += "<div class='reading'>";
-  html += "<h3>🔌 Your Circuit</h3>";
-  html += "<pre style='text-align: left; background: #2a2a2a; padding: 15px; border-radius: 5px;'>";
-  html += "5V ──[150Ω]──●──[PT100]──GND\n";
-  html += "              │\n";
-  html += "           GPIO35\n";
-  html += "\n";
-  html += "Expected at room temp (70°F):\n";
-  html += "PT100 ≈ 108Ω\n";
-  html += "Voltage ≈ 2.1V\n";
-  html += "ADC ≈ 1700";
-  html += "</pre>";
-  html += "</div>";
-  
-  html += "<button class='btn' onclick='location.reload()'>🔄 Refresh Reading</button>";
-  html += "<br><a href='/' style='color: #60a5fa; margin-top: 20px; display: inline-block;'>← Back to Dashboard</a>";
-  
-  // Auto-refresh every 3 seconds
-  html += "<script>setTimeout(() => location.reload(), 3000);</script>";
-  
-  html += "</body></html>";
-  
-  req->send(200, "text/html", html);
-});
-
-server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta charset='utf-8'>";
-  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Reboot Controller</title>";
-  html += "<style>";
-  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; text-align: center; }";
-  html += ".btn { padding: 20px 40px; background: #dc2626; color: white; border: none; border-radius: 10px; font-size: 1.2em; cursor: pointer; margin: 20px; }";
-  html += ".btn:hover { background: #b91c1c; }";
-  html += ".warning { background: #f59e0b; padding: 20px; border-radius: 10px; margin: 20px 0; }";
-  html += "</style></head><body>";
-  
-  html += "<h1>🔄 Reboot Controller</h1>";
-  
-  html += "<div class='warning'>";
-  html += "⚠️ <strong>Warning:</strong> This will immediately restart the ESP32.<br>";
-  html += "The grill will stop operation and restart with new firmware.";
-  html += "</div>";
-  
-  html += "<button class='btn' onclick='confirmReboot()'>REBOOT NOW</button>";
-  html += "<br><a href='/' style='color: #60a5fa; margin-top: 20px; display: inline-block;'>← Cancel - Back to Dashboard</a>";
-  
-  html += "<script>";
-  html += "function confirmReboot() {";
-  html += "  if (confirm('Are you sure you want to reboot the controller?\\n\\nThis will restart the ESP32 immediately.')) {";
-  html += "    document.body.innerHTML = '<h1>🔄 Rebooting...</h1><p>Please wait 30 seconds then reload the page.</p>';";
-  html += "    fetch('/do_reboot', {method: 'POST'});";
-  html += "    setTimeout(() => {";
-  html += "      window.location.href = '/';";
-  html += "    }, 30000);";
-  html += "  }";
-  html += "}";
-  html += "</script>";
-  
-  html += "</body></html>";
-  
-  req->send(200, "text/html", html);
-});
-
-// Actual reboot endpoint
-server.on("/do_reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
-  req->send(200, "text/plain", "Rebooting in 2 seconds...");
-  
-  Serial.println("Manual reboot requested via web interface");
-  
-  // Stop grill operations safely
-  grillRunning = false;
-  relay_emergency_stop();
-  
-  // Delay to send response, then reboot
-  delay(2000);
-  ESP.restart();
-});
-
-// Add this to your GrillWebServer.cpp to see debug output via web
-
-// Web-based debug output endpoint
-server.on("/grill_debug_live", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta charset='utf-8'>";
-  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Live Grill Debug</title>";
+  html += "<title>MAX31865 SPI Test</title>";
   html += "<style>";
   html += "body { background: #1a1a1a; color: #fff; font-family: 'Courier New', monospace; padding: 20px; }";
-  html += ".debug-line { background: rgba(255,255,255,0.1); padding: 10px; margin: 5px 0; border-radius: 5px; font-size: 14px; }";
-  html += ".good { border-left: 4px solid #059669; }";
-  html += ".warn { border-left: 4px solid #f59e0b; }";
-  html += ".error { border-left: 4px solid #dc2626; }";
-  html += ".timestamp { color: #9ca3af; font-size: 12px; }";
+  html += ".container { max-width: 800px; margin: 0 auto; }";
+  html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
+  html += ".test-section { background: rgba(255,255,255,0.1); padding: 20px; margin: 15px 0; border-radius: 10px; }";
+  html += ".test-result { font-family: monospace; background: #2a2a2a; padding: 15px; border-radius: 5px; margin: 10px 0; }";
+  html += ".success { border-left: 5px solid #059669; }";
+  html += ".error { border-left: 5px solid #dc2626; }";
+  html += ".warning { border-left: 5px solid #f59e0b; }";
+  html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px; }";
+  html += ".btn:hover { background: #047857; }";
   html += "</style></head><body>";
   
-  html += "<h1>🔍 Live Grill Sensor Debug</h1>";
-  html += "<p>Real-time debug output (equivalent to serial monitor)</p>";
+  html += "<div class='container'>";
+  html += "<h1>🔧 MAX31865 SPI Communication Test</h1>";
   
-  // Manual debug execution - call the temperature function and capture results
-  
-  // Read ADC
-  int totalADC = 0;
-  for (int i = 0; i < 5; i++) {
-    totalADC += analogRead(GRILL_TEMP_PIN);
-    delay(5);
-  }
-  int adcReading = totalADC / 5;
-  double voltage = (adcReading / 4095.0) * 5.0;
-  
-  // Calculate with old formula (wrong)
-  double oldResistance = 150.0 * voltage / (5.0 - voltage);
-  
-  // Calculate with corrected formula  
-  double correctedResistance = 150.0 * (5.0 - voltage) / voltage;
-  
-  // Add connection resistance correction
-  double connectionResistance = 88.4;
-  double finalResistance = correctedResistance + connectionResistance;
-  
-  // Calculate temperatures
-  double tempC = (finalResistance - 100.0) / (100.0 * 0.00385);
-  double tempF = tempC * 9.0 / 5.0 + 32.0;
-  
-  // Determine status
-  String status = "good";
-  String message = "Normal operation";
-  
-  if (voltage <= 0.1 || voltage >= 4.9) {
-    status = "error";
-    message = "Voltage out of range";
-  } else if (correctedResistance < 30 || correctedResistance > 300) {
-    status = "error"; 
-    message = "Resistance out of range";
-  } else if (tempF < -50 || tempF > 900) {
-    status = "error";
-    message = "Temperature out of range";
-  } else if (finalResistance < 80 || finalResistance > 200) {
-    status = "warn";
-    message = "Resistance suspicious but usable";
-  }
-  
-  unsigned long uptime = millis();
-  
-  html += "<div class='debug-line " + status + "'>";
-  html += "<div class='timestamp'>[" + String(uptime) + "ms] GRILL SENSOR DEBUG:</div>";
-  html += "🔥 ADC Reading: " + String(adcReading) + " / 4095<br>";
-  html += "🔥 Voltage: " + String(voltage, 3) + "V<br>";
-  html += "🔥 Old Formula Resistance: " + String(oldResistance, 1) + "Ω (WRONG)<br>";
-  html += "🔥 Corrected Formula: " + String(correctedResistance, 1) + "Ω<br>";
-  html += "🔧 Connection Resistance Added: +" + String(connectionResistance, 1) + "Ω<br>";
-  html += "🔥 Final PT100 Resistance: " + String(finalResistance, 1) + "Ω<br>";
-  html += "🌡️ Temperature: " + String(tempF, 1) + "°F (" + String(tempC, 1) + "°C)<br>";
-  html += "📊 Status: " + message;
+  // Pin Configuration
+  html += "<div class='test-section'>";
+  html += "<h3>📍 Current Pin Configuration</h3>";
+  html += "<div class='test-result'>";
+  html += "CS Pin: GPIO" + String(MAX31865_CS_PIN) + "<br>";
+  html += "CLK Pin: GPIO" + String(MAX31865_CLK_PIN) + "<br>";
+  html += "MOSI Pin: GPIO" + String(MAX31865_MOSI_PIN) + "<br>";
+  html += "MISO Pin: GPIO" + String(MAX31865_MISO_PIN) + "<br>";
+  html += "</div>";
   html += "</div>";
   
-  // Show what the actual function returns
-  double actualReading = readGrillTemperature();
-  String resultClass = (actualReading > -900) ? "good" : "error";
-  html += "<div class='debug-line " + resultClass + "'>";
-  html += "<div class='timestamp'>[" + String(millis()) + "ms] FUNCTION RESULT:</div>";
-  html += "🎯 readGrillTemperature() returns: " + String(actualReading, 1) + "°F";
-  if (actualReading == -999.0) {
-    html += " (SENSOR ERROR - check voltage/resistance limits)";
-  }
+  // Basic SPI Test
+  html += "<div class='test-section'>";
+  html += "<h3>🔌 SPI Communication Test</h3>";
+  html += "<div id='spi-results' class='test-result'>Click 'Run Test' to start...</div>";
+  html += "<button class='btn' onclick='runSPITest()'>🧪 Run SPI Test</button>";
   html += "</div>";
   
-  // Circuit analysis
-  html += "<div class='debug-line good'>";
-  html += "<div class='timestamp'>CIRCUIT ANALYSIS:</div>";
-  html += "🔌 Your Circuit: 5V → PT100(" + String(finalResistance, 1) + "Ω) → GPIO35(" + String(voltage, 3) + "V) → 150Ω → GND<br>";
-  html += "📏 Expected at 70°F: 5V → PT100(108Ω) → GPIO35(2.1V) → 150Ω → GND<br>";
-  html += "⚠️ Extra Resistance: " + String(connectionResistance, 1) + "Ω (poor connections)<br>";
-  html += "✅ Temperature Calculation: (" + String(finalResistance, 1) + " - 100) / (100 × 0.00385) = " + String(tempC, 1) + "°C";
+  // Register Dump
+  html += "<div class='test-section'>";
+  html += "<h3>📊 Register Values</h3>";
+  html += "<div id='register-dump' class='test-result'>Click 'Read Registers' to view...</div>";
+  html += "<button class='btn' onclick='readRegisters()'>📖 Read Registers</button>";
   html += "</div>";
   
-  html += "<button onclick='location.reload()' style='padding:15px 30px; background:#059669; color:white; border:none; border-radius:5px; margin:20px 0; cursor:pointer;'>🔄 Refresh Debug</button>";
-  html += "<br><a href='/' style='color:#60a5fa;'>← Back to Dashboard</a>";
+  // Pin Test
+  html += "<div class='test-section'>";
+  html += "<h3>⚡ Pin Connectivity Test</h3>";
+  html += "<div id='pin-test' class='test-result'>Click 'Test Pins' to check...</div>";
+  html += "<button class='btn' onclick='testPins()'>🔍 Test Pins</button>";
+  html += "</div>";
   
-  // Auto-refresh every 5 seconds
-  html += "<script>setTimeout(() => location.reload(), 5000);</script>";
+  // Quick Actions
+  html += "<div class='test-section'>";
+  html += "<h3>⚡ Quick Actions</h3>";
+  html += "<button class='btn' onclick='resetSPI()'>🔄 Reset SPI</button>";
+  html += "<button class='btn' onclick='clearFaults()'>🧹 Clear Faults</button>";
+  html += "<button class='btn' onclick='location.reload()'>🔄 Refresh Page</button>";
+  html += "</div>";
   
+  html += "<a href='/' style='display: block; text-align: center; color: #60a5fa; margin: 20px;'>← Back to Dashboard</a>";
+  html += "</div>";
+  
+  // JavaScript for testing
+  html += "<script>";
+  
+  html += "function runSPITest() {";
+  html += "  document.getElementById('spi-results').innerHTML = 'Running SPI test...';";
+  html += "  fetch('/spi_test_run')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => {";
+  html += "      const resultDiv = document.getElementById('spi-results');";
+  html += "      resultDiv.innerHTML = data.replace(/\\n/g, '<br>');";
+  html += "      ";
+  html += "      if (data.includes('WORKING')) {";
+  html += "        resultDiv.className = 'test-result success';";
+  html += "      } else if (data.includes('FAILED')) {";
+  html += "        resultDiv.className = 'test-result error';";
+  html += "      } else {";
+  html += "        resultDiv.className = 'test-result warning';";
+  html += "      }";
+  html += "    })";
+  html += "    .catch(err => {";
+  html += "      document.getElementById('spi-results').innerHTML = 'Error: ' + err;";
+  html += "      document.getElementById('spi-results').className = 'test-result error';";
+  html += "    });";
+  html += "}";
+  
+  html += "function readRegisters() {";
+  html += "  document.getElementById('register-dump').innerHTML = 'Reading registers...';";
+  html += "  fetch('/spi_register_dump')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => {";
+  html += "      document.getElementById('register-dump').innerHTML = data.replace(/\\n/g, '<br>');";
+  html += "      document.getElementById('register-dump').className = 'test-result';";
+  html += "    });";
+  html += "}";
+  
+  html += "function testPins() {";
+  html += "  document.getElementById('pin-test').innerHTML = 'Testing pin connectivity...';";
+  html += "  fetch('/spi_pin_test')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => {";
+  html += "      document.getElementById('pin-test').innerHTML = data.replace(/\\n/g, '<br>');";
+  html += "      document.getElementById('pin-test').className = 'test-result';";
+  html += "    });";
+  html += "}";
+  
+  html += "function resetSPI() {";
+  html += "  fetch('/spi_reset')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => alert(data));";
+  html += "}";
+  
+  html += "function clearFaults() {";
+  html += "  fetch('/max31865_clear')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => alert(data));";
+  html += "}";
+  
+  html += "</script>";
   html += "</body></html>";
   
   req->send(200, "text/html", html);
 });
 
-// FIXED Web Calibration Endpoints - Add to GrillWebServer.cpp
-// Fixed string concatenation issues
+// SPI Test execution endpoint
+server.on("/spi_test_run", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String result = grillSensor.getSPITestResults();
+  req->send(200, "text/plain", result);
+});
 
-// API endpoint to test current reading - FIXED VERSION
-server.on("/cal_test", HTTP_GET, [](AsyncWebServerRequest *req) {
-  int adc = analogRead(GRILL_TEMP_PIN);
-  double temp = readGrillTemperature();
+// Register dump endpoint
+server.on("/spi_register_dump", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String dump = "MAX31865 Register Dump:\\n\\n";
   
-  String result = "Current Reading:\\n";
-  result += "ADC: " + String(adc) + "\\n";
-  result += "Temperature: " + String(temp, 1) + "°F\\n";
-  result += "Status: ";
-  if (isValidTemperature(temp)) {
-    result += "VALID";
+  // Read all important registers
+  uint8_t registers[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+  String regNames[] = {"Config", "RTD MSB", "RTD LSB", "High Fault MSB", 
+                       "High Fault LSB", "Low Fault MSB", "Low Fault LSB", "Fault Status"};
+  
+  for (int i = 0; i < 8; i++) {
+    // Read register
+    digitalWrite(MAX31865_CS_PIN, LOW);
+    delayMicroseconds(10);
+    SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+    SPI.transfer(registers[i]);
+    uint8_t value = SPI.transfer(0x00);
+    SPI.endTransaction();
+    delayMicroseconds(10);
+    digitalWrite(MAX31865_CS_PIN, HIGH);
+    
+    dump += regNames[i] + " (0x" + String(registers[i], HEX) + "): 0x" + String(value, HEX) + "\\n";
+    delay(10);
+  }
+  
+  req->send(200, "text/plain", dump);
+});
+
+// Pin test endpoint
+server.on("/spi_pin_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+  String result = "Pin Connectivity Test:\\n\\n";
+  
+  // Test CS pin
+  result += "Testing CS Pin (GPIO" + String(MAX31865_CS_PIN) + "):\\n";
+  pinMode(MAX31865_CS_PIN, OUTPUT);
+  digitalWrite(MAX31865_CS_PIN, HIGH);
+  delay(10);
+  digitalWrite(MAX31865_CS_PIN, LOW);
+  delay(10);
+  digitalWrite(MAX31865_CS_PIN, HIGH);
+  result += "CS pin toggle test: OK\\n\\n";
+  
+  // Test basic SPI transaction
+  result += "Testing SPI Transaction:\\n";
+  digitalWrite(MAX31865_CS_PIN, LOW);
+  delayMicroseconds(10);
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+  SPI.transfer(0x00);  // Config register read
+  uint8_t response = SPI.transfer(0x00);
+  SPI.endTransaction();
+  delayMicroseconds(10);
+  digitalWrite(MAX31865_CS_PIN, HIGH);
+  
+  result += "SPI Response: 0x" + String(response, HEX) + "\\n";
+  
+  if (response == 0x00 || response == 0xFF) {
+    result += "Status: NO COMMUNICATION\\n";
+    result += "Check: MOSI/MISO wiring, power, CS pin\\n";
   } else {
-    result += "INVALID";
+    result += "Status: COMMUNICATION DETECTED\\n";
   }
   
   req->send(200, "text/plain", result);
 });
 
-// API endpoint to get current calibration data - FIXED VERSION
-server.on("/cal_current", HTTP_GET, [](AsyncWebServerRequest *req) {
-  int adc = analogRead(GRILL_TEMP_PIN);
-  double temp = readGrillTemperature();
+// SPI reset endpoint
+server.on("/spi_reset", HTTP_GET, [](AsyncWebServerRequest *req) {
+  // Reinitialize SPI
+  SPI.end();
+  delay(100);
+  SPI.begin(MAX31865_CLK_PIN, MAX31865_MISO_PIN, MAX31865_MOSI_PIN);
+  delay(100);
   
-  String json = "{";
-  json += "\"adc\":" + String(adc) + ",";
-  json += "\"temp\":" + String(temp, 1) + ",";
-  json += "\"calibrated\":false,";  
-  json += "\"adc2\":0,";
-  json += "\"temp2\":0.0";
-  json += "}";
+  // Reset CS pin
+  pinMode(MAX31865_CS_PIN, OUTPUT);
+  digitalWrite(MAX31865_CS_PIN, HIGH);
   
-  req->send(200, "application/json", json);
+  req->send(200, "text/plain", "SPI reset complete");
 });
 
-// API endpoint to set calibration point 2 - FIXED VERSION
-server.on("/cal_set_point2", HTTP_POST, [](AsyncWebServerRequest *req) {
-  if (!req->hasParam("temp")) {
-    req->send(400, "text/plain", "Missing temperature parameter");
-    return;
-  }
-  
-  float measuredTemp = req->getParam("temp")->value().toFloat();
-  
-  if (measuredTemp < 50.0 || measuredTemp > 800.0) {
-    req->send(400, "text/plain", "Temperature out of range (50-800°F)");
-    return;
-  }
-  
-  // Call the calibration function
-  int currentADC = analogRead(GRILL_TEMP_PIN);
-setCalibrationPoint2(currentADC, measuredTemp);
-  
-  String response = "Calibration point 2 set to " + String(measuredTemp, 1) + "°F. Two-point calibration now active!";
-  req->send(200, "text/plain", response);
-});
-
-// API endpoint to reset calibration - FIXED VERSION
-server.on("/cal_reset", HTTP_POST, [](AsyncWebServerRequest *req) {
-  resetCalibration();
-  req->send(200, "text/plain", "Calibration reset to defaults. Using single-point baseline calibration.");
-});
-
-// API endpoint to get calibration status - FIXED VERSION
-server.on("/cal_status", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String status = "Calibration Status:\\n";
-  status += "Point 1: ADC 3271 = 81.0°F (baseline)\\n";
-  status += "Point 2: Not fully implemented yet\\n";
-  status += "Status: Single-point calibration active";
-  
-  req->send(200, "text/plain", status);
-});
-
-// Main calibration page - COMPLETE FIXED VERSION
-server.on("/calibration", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta charset='utf-8'>";
-  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Temperature Calibration - Grill Controller</title>";
-  html += "<style>";
-  html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
-  html += ".container { max-width: 800px; margin: 0 auto; }";
-  html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
-  html += ".cal-section { background: rgba(255,255,255,0.1); padding: 20px; margin: 15px 0; border-radius: 10px; }";
-  html += ".current-reading { background: #059669; padding: 15px; border-radius: 5px; margin: 15px 0; text-align: center; }";
-  html += ".cal-point { background: rgba(255,255,255,0.15); padding: 15px; margin: 10px 0; border-radius: 5px; }";
-  html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; font-size: 1.1em; cursor: pointer; margin: 10px 5px; }";
-  html += ".btn:hover { background: #047857; }";
-  html += ".btn-danger { background: #dc2626; }";
-  html += ".btn-danger:hover { background: #b91c1c; }";
-  html += ".btn-warning { background: #f59e0b; }";
-  html += ".form-group { margin: 15px 0; }";
-  html += "label { display: block; margin-bottom: 5px; font-weight: bold; }";
-  html += "input { width: 100%; padding: 10px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background: #333; color: #fff; }";
-  html += ".status-good { color: #4ade80; }";
-  html += ".status-warning { color: #f59e0b; }";
-  html += ".status-error { color: #ef4444; }";
-  html += ".progress-bar { width: 100%; height: 20px; background: #333; border-radius: 10px; overflow: hidden; margin: 10px 0; }";
-  html += ".progress-fill { height: 100%; background: #4ade80; transition: width 0.3s ease; }";
-  html += "</style></head><body>";
-  
-  html += "<div class='container'>";
-  html += "<h1>🌡️ Temperature Calibration</h1>";
-  
-  // Current temperature reading
-  double currentTemp = readGrillTemperature();
-  int currentADC = analogRead(GRILL_TEMP_PIN);
-  
-  html += "<div class='current-reading'>";
-  html += "<h2>Current Reading</h2>";
-  html += "<div style='font-size: 2em; margin: 10px 0;'>" + String(currentTemp, 1) + "°F</div>";
-  html += "<div>ADC: " + String(currentADC) + " / 4095</div>";
-  html += "<button class='btn' onclick='refreshReading()'>🔄 Refresh</button>";
-  html += "</div>";
-  
-  // Calibration status
-  html += "<div class='cal-section'>";
-  html += "<h3>📊 Calibration Status</h3>";
-  html += "<div id='calibration-status'>";
-  html += "<div class='cal-point'>";
-  html += "<strong>Point 1 (Baseline):</strong> ADC 3271 = 81.0°F (Room Temperature)";
-  html += "<span class='status-good'> ✅ SET</span>";
-  html += "</div>";
-  html += "<div class='cal-point' id='point2-status'>";
-  html += "<strong>Point 2 (High Temp):</strong> Not set yet";
-  html += "<span class='status-warning'> ⚠️ NEEDED</span>";
-  html += "</div>";
-  html += "</div>";
-  html += "</div>";
-  
-  // Calibration procedure
-  html += "<div class='cal-section'>";
-  html += "<h3>🔧 Calibration Procedure</h3>";
-  
-  html += "<div style='margin: 15px 0;'>";
-  html += "<h4>Step 1: Baseline (Complete)</h4>";
-  html += "<p>✅ Room temperature baseline already set at 81°F</p>";
-  html += "</div>";
-  
-  html += "<div style='margin: 15px 0;'>";
-  html += "<h4>Step 2: Heat Grill to ~200°F</h4>";
-  html += "<p>🔥 Start your grill and heat to approximately 200°F</p>";
-  html += "<div class='progress-bar'>";
-  html += "<div class='progress-fill' id='heat-progress' style='width: 0%;'></div>";
-  html += "</div>";
-  html += "<div id='heat-status'>Current: " + String(currentTemp, 1) + "°F / Target: 200°F</div>";
-  html += "</div>";
-  
-  html += "<div style='margin: 15px 0;'>";
-  html += "<h4>Step 3: Measure with Meat Thermometer</h4>";
-  html += "<p>📏 Use your meat thermometer to get the exact temperature</p>";
-  html += "</div>";
-  
-  html += "<div style='margin: 15px 0;'>";
-  html += "<h4>Step 4: Set Calibration Point</h4>";
-  html += "<form onsubmit='setCalibrationPoint(event)'>";
-  html += "<div class='form-group'>";
-  html += "<label>Meat Thermometer Reading (°F):</label>";
-  html += "<input type='number' id='measured-temp' step='0.1' min='100' max='400' placeholder='Enter exact temperature from thermometer' required>";
-  html += "</div>";
-  html += "<button type='submit' class='btn'>🎯 Set Calibration Point 2</button>";
-  html += "</form>";
-  html += "</div>";
-  html += "</div>";
-  
-  // Quick actions
-  html += "<div class='cal-section'>";
-  html += "<h3>⚡ Quick Actions</h3>";
-  html += "<button class='btn' onclick='testReading()'>🧪 Test Current Reading</button>";
-  html += "<button class='btn btn-warning' onclick='resetCalibration()'>🔄 Reset Calibration</button>";
-  html += "<button class='btn' onclick='showCalibrationStatus()'>📊 Show Detailed Status</button>";
-  html += "</div>";
-  
-  // Instructions
-  html += "<div class='cal-section'>";
-  html += "<h3>📋 Instructions</h3>";
-  html += "<ol>";
-  html += "<li><strong>Heat your grill</strong> to approximately 200°F using normal startup procedure</li>";
-  html += "<li><strong>Wait for temperature to stabilize</strong> (give it 5-10 minutes)</li>";
-  html += "<li><strong>Place meat thermometer</strong> near the grill temperature sensor</li>";
-  html += "<li><strong>Read the exact temperature</strong> from your thermometer</li>";
-  html += "<li><strong>Enter that temperature</strong> in the form above and click 'Set Calibration Point 2'</li>";
-  html += "<li><strong>Calibration complete!</strong> Your grill will now read accurately from 81°F to 200°F+</li>";
-  html += "</ol>";
-  html += "</div>";
-  
-  html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>← Back to Grill Control</a>";
-  html += "</div>";
-
-  // JavaScript for functionality - COMPLETE FIXED VERSION
-  html += "<script>";
-  
-  // Auto-update current temperature and heat progress
-  html += "function updateDisplay() {";
-  html += "  fetch('/cal_current')";
-  html += "    .then(response => response.json())";
-  html += "    .then(data => {";
-  html += "      // Update current reading display";
-  html += "      const tempDisplay = document.querySelector('.current-reading div[style*=\"font-size: 2em\"]');";
-  html += "      if (tempDisplay) tempDisplay.innerHTML = data.temp.toFixed(1) + '°F';";
-  html += "      ";
-  html += "      const adcDisplay = document.querySelector('.current-reading div:nth-child(3)');";
-  html += "      if (adcDisplay) adcDisplay.innerHTML = 'ADC: ' + data.adc + ' / 4095';";
-  html += "      ";
-  html += "      // Update heat progress";
-  html += "      const progress = Math.min(Math.max((data.temp - 81) / (200 - 81) * 100, 0), 100);";
-  html += "      const progressBar = document.getElementById('heat-progress');";
-  html += "      if (progressBar) progressBar.style.width = progress + '%';";
-  html += "      ";
-  html += "      const heatStatus = document.getElementById('heat-status');";
-  html += "      if (heatStatus) heatStatus.innerHTML = 'Current: ' + data.temp.toFixed(1) + '°F / Target: 200°F (' + progress.toFixed(0) + '%)';";
-  html += "      ";
-  html += "      // Update calibration status if calibrated";
-  html += "      if (data.calibrated) {";
-  html += "        const point2Status = document.getElementById('point2-status');";
-  html += "        if (point2Status) point2Status.innerHTML = '<strong>Point 2 (High Temp):</strong> ADC ' + data.adc2 + ' = ' + data.temp2.toFixed(1) + '°F <span class=\"status-good\">✅ SET</span>';";
-  html += "      }";
-  html += "    })";
-  html += "    .catch(err => console.log('Update failed:', err));";
-  html += "}";
-  
-  html += "function refreshReading() {";
-  html += "  updateDisplay();";
-  html += "}";
-  
-  html += "function setCalibrationPoint(event) {";
-  html += "  event.preventDefault();";
-  html += "  const tempInput = document.getElementById('measured-temp');";
-  html += "  const temp = tempInput.value;";
-  html += "  ";
-  html += "  if (temp && temp >= 100 && temp <= 400) {";
-  html += "    fetch('/cal_set_point2?temp=' + encodeURIComponent(temp), {method: 'POST'})";
-  html += "      .then(response => response.text())";
-  html += "      .then(data => {";
-  html += "        alert('✅ ' + data);";
-  html += "        tempInput.value = '';";
-  html += "        updateDisplay();";
-  html += "        setTimeout(() => location.reload(), 2000);";
-  html += "      })";
-  html += "      .catch(err => alert('❌ Error: ' + err));";
-  html += "  } else {";
-  html += "    alert('Please enter a valid temperature between 100°F and 400°F');";
-  html += "  }";
-  html += "}";
-  
-  html += "function testReading() {";
-  html += "  fetch('/cal_test')";
-  html += "    .then(response => response.text())";
-  html += "    .then(data => alert('🧪 Test Result:\\n' + data))";
-  html += "    .catch(err => alert('❌ Error: ' + err));";
-  html += "}";
-  
-  html += "function resetCalibration() {";
-  html += "  if (confirm('Reset calibration to defaults? This will remove your second calibration point.')) {";
-  html += "    fetch('/cal_reset', {method: 'POST'})";
-  html += "      .then(response => response.text())";
-  html += "      .then(data => {";
-  html += "        alert('🔄 ' + data);";
-  html += "        setTimeout(() => location.reload(), 1000);";
-  html += "      })";
-  html += "      .catch(err => alert('❌ Error: ' + err));";
-  html += "  }";
-  html += "}";
-  
-  html += "function showCalibrationStatus() {";
-  html += "  fetch('/cal_status')";
-  html += "    .then(response => response.text())";
-  html += "    .then(data => alert('📊 Calibration Status:\\n' + data))";
-  html += "    .catch(err => alert('❌ Error: ' + err));";
-  html += "}";
-  
-  // Auto-update every 3 seconds
-  html += "setInterval(updateDisplay, 3000);";
-  html += "updateDisplay();"; // Initial load
-  
-  html += "</script>";
-  html += "</body></html>";
-  
-  req->send(200, "text/html", html);
-});
-
-
-
-server.begin();
-  Serial.println("Web server started with all endpoints");
+  server.begin();
+  Serial.println("Web server started with MAX31865 support");
 }

@@ -1,4 +1,4 @@
-// Utility.h - Enhanced with flexible two-point calibration system
+// Utility.h - Updated with missing function declaration
 #ifndef UTILITY_H
 #define UTILITY_H
 
@@ -35,8 +35,7 @@ bool getMeatProbesDebug();
 bool getRelayDebug();
 bool getSystemDebug();
 
-// ENHANCED CALIBRATION SYSTEM
-// Core calibration functions
+// MAX31865 CALIBRATION SYSTEM
 void setupTemperatureCalibration();
 void saveCalibrationData();
 void loadCalibrationData();
@@ -44,41 +43,12 @@ void printCalibrationStatus();
 void resetCalibration();
 void handleCalibrationCommands(String command);
 
-// Flexible calibration point management
-void setCalibrationPoint1(int adc, float temp);     // Set/modify point 1
-void setCalibrationPoint2(int adc, float temp);     // Set/modify point 2
-void setCalibrationPoint1Current(float temp);       // Use current ADC for point 1
-void setCalibrationPoint2Current(float temp);       // Use current ADC for point 2
-void deleteCalibrationPoint2();                     // Remove point 2 (back to single-point)
-
-// Calibration data access
-struct CalibrationData {
-  int adc1;
-  float temp1;
-  int adc2;
-  float temp2;
-  float slope;
-  float offset;
-  bool calibrated;
-  bool point1Set;
-  bool point2Set;
-};
-
-CalibrationData getCalibrationData();               // Get current calibration info
-bool isCalibrationValid();                         // Check if calibration is reasonable
-String getCalibrationEquation();                   // Get linear equation as string
-float predictTemperature(int adc);                 // Predict temperature for given ADC
-
-// Calibration utilities
-void validateCalibration();                         // Check calibration for issues
-void swapCalibrationPoints();                       // Swap point 1 and point 2 if needed
-String getCalibrationStatusJSON();                  // Get status as JSON for web interface
-
 // Temperature diagnostics
 void printTemperatureDiagnostics();
 void runTemperatureDiagnostics();      
 void debugTemperatureLoop();           
-void testAmbientNTC();                 
+void testAmbientNTC();
+void testGrillSensor();  // ADD THIS MISSING FUNCTION DECLARATION
 
 // Settings functions  
 void save_setpoint();

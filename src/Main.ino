@@ -1,12 +1,14 @@
-// Main.ino - Updated with calibration system integration
+// Main.ino - Fixed file - rename from Main.ino to main.cpp or ensure proper .ino extension
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
+#include <SPI.h>  // Added for MAX31865
 
 // Include all your project headers
 #include "Globals.h"
 #include "Utility.h"
 #include "TemperatureSensor.h"
+#include "MAX31865Sensor.h"  // New MAX31865 support
 #include "RelayControl.h"
 #include "PelletControl.h"
 #include "Ignition.h"
@@ -21,24 +23,28 @@ void setup() {
   while (!Serial) delay(10);
   
   Serial.println("\n=====================================");
-  Serial.println("ESP32 GRILL CONTROLLER - CALIBRATED MODE");
+  Serial.println("ESP32 GRILL CONTROLLER - MAX31865 RTD MODE");
   Serial.println("=====================================");
   
-  // Initialize I2C first
+ 
+  // Initialize I2C for ADS1115 and OLED
   Wire.begin(SDA_PIN, SCL_PIN);
   Serial.printf("I2C initialized: SDA=%d, SCL=%d\n", SDA_PIN, SCL_PIN);
-  
-  // Initialize all components
+ 
+  // Initialize HSPI for MAX31865 BEFORE I2C
+  SPI.begin(MAX31865_CLK_PIN, MAX31865_MISO_PIN, MAX31865_MOSI_PIN);
+  Serial.printf("HSPI initialized: CLK=%d, MISO=%d, MOSI=%d\n", 
+                MAX31865_CLK_PIN, MAX31865_MISO_PIN, MAX31865_MOSI_PIN);
+    
+  // Initialize relay control first (safety)
   relay_init();
-  pellet_init();
-  ignition_init();
-  button_init();
   
-  // Initialize temperature calibration system FIRST
-  setupTemperatureCalibration();
+  // Initialize MAX31865 RTD sensor for grill temperature
+  Serial.println("\nInitializing MAX31865 RTD sensor...");
+  setupTemperatureCalibration();  // This now initializes MAX31865
   
-  // Initialize temperature sensors with detailed diagnostics
-  Serial.println("\nInitializing temperature sensors...");
+  // Initialize other temperature sensors
+  Serial.println("\nInitializing other temperature sensors...");
   
   // Initialize ADS1115 for meat probes
   if (tempSensor.begin()) {
@@ -46,6 +52,11 @@ void setup() {
   } else {
     Serial.println("❌ ADS1115 meat probes failed to initialize");
   }
+  
+  // Initialize other components
+  pellet_init();
+  ignition_init();
+  button_init();
   
   // Initialize OLED (optional)
   if (oledDisplay.begin()) {
@@ -63,13 +74,13 @@ void setup() {
   // Initialize web server
   setup_grill_server();
   
-  Serial.println("\nSetup complete! Temperature calibration system active!");
+  Serial.println("\nSetup complete! MAX31865 RTD sensor active!");
   
-  // Show calibration status immediately
+  // Show sensor status
   printCalibrationStatus();
   
-  Serial.println("\n🔧 CALIBRATION MODE ACTIVE");
-  Serial.println("Type 'cal_help' for calibration commands");
+  Serial.println("\n🔧 MAX31865 RTD MODE ACTIVE");
+  Serial.println("Type 'max_help' for MAX31865 commands");
   Serial.println("Type 'help' for all available commands");
   Serial.println("=====================================\n");
 }
@@ -106,7 +117,7 @@ void loop() {
   // Temperature and control updates - every 1 second
   if (now - lastTempUpdate >= TEMP_UPDATE_INTERVAL) {
     
-    // Update all temperature sensors
+    // Update meat probe sensors
     tempSensor.updateAll();
     
     // Run ignition sequence if active
@@ -115,12 +126,18 @@ void loop() {
     // Run pellet control if grill is running
     pellet_feed_loop();
     
-    // Check for emergency conditions
+    // Check for emergency conditions using MAX31865
     double grillTemp = readGrillTemperature();
     if (isValidTemperature(grillTemp) && grillTemp > EMERGENCY_TEMP) {
       Serial.printf("EMERGENCY: Temperature %.1f°F exceeds limit!\n", grillTemp);
       relay_emergency_stop();
       grillRunning = false;
+    }
+    
+    // Check for MAX31865 faults
+    if (grillSensor.hasFault()) {
+      Serial.printf("⚠️ MAX31865 Fault: %s\n", grillSensor.getFaultString().c_str());
+      grillSensor.clearFault();  // Auto-clear faults for continuous operation
     }
     
     lastTempUpdate = now;
@@ -134,13 +151,16 @@ void loop() {
   
   // DIAGNOSTIC MODE - Run detailed diagnostics every 30 seconds
   if (now - lastDiagnostic >= 30000) {
-    Serial.println("\n" + String("=").substring(0, 60));
-    Serial.println("PERIODIC DIAGNOSTIC CHECK");
-    Serial.println(String("=").substring(0, 60));
-    
-    runTemperatureDiagnostics();
-    
-    lastDiagnostic = now;
+    if (getSystemDebug()) {  // Only if system debug is enabled
+      Serial.println("\n" + String("=").substring(0, 60));
+      Serial.println("PERIODIC DIAGNOSTIC CHECK");
+      Serial.println(String("=").substring(0, 60));
+      
+      runTemperatureDiagnostics();
+      
+      lastDiagnostic = now;
+    }
+    lastDiagnostic = now;  // Update timestamp even if debug is off
   }
   
   // Allow other tasks to run
@@ -150,14 +170,21 @@ void loop() {
 void printSystemStatus() {
   Serial.println("\n--- SYSTEM STATUS ---");
   
-  // Temperatures with calibration info
+  // Grill temperature with MAX31865 info
   double grillTemp = readGrillTemperature();
-  double ambientTemp = readAmbientTemperature();
-  
   Serial.printf("Grill Temp: %.1f°F", grillTemp);
-  if (!isValidTemperature(grillTemp)) Serial.print(" (SENSOR ERROR)");
+  if (!isValidTemperature(grillTemp)) {
+    Serial.print(" (SENSOR ERROR)");
+    if (grillSensor.hasFault()) {
+      Serial.printf(" - %s", grillSensor.getFaultString().c_str());
+    }
+  } else {
+    Serial.printf(" (R: %.1fΩ)", grillSensor.readRTD());
+  }
   Serial.println();
   
+  // Ambient temperature
+  double ambientTemp = readAmbientTemperature();
   Serial.printf("Ambient Temp: %.1f°F", ambientTemp);
   if (!isValidTemperature(ambientTemp)) Serial.print(" (SENSOR ERROR)");
   Serial.println();
@@ -188,6 +215,13 @@ void printSystemStatus() {
                 digitalRead(RELAY_HOPPER_FAN_PIN) ? "ON" : "OFF",
                 digitalRead(RELAY_BLOWER_FAN_PIN) ? "ON" : "OFF");
   
+  // MAX31865 status
+  Serial.printf("MAX31865: %s", grillSensor.isConnected() ? "OK" : "ERROR");
+  if (grillSensor.hasFault()) {
+    Serial.printf(" (Fault: %s)", grillSensor.getFaultString().c_str());
+  }
+  Serial.println();
+  
   // WiFi status
   Serial.printf("WiFi: %s", wifiManager.getStatusString().c_str());
   if (wifiManager.isConnected()) {
@@ -201,33 +235,38 @@ void printSystemStatus() {
   Serial.println("-------------------\n");
 }
 
-// Enhanced serial command handler with calibration support
+// Enhanced serial command handler with MAX31865 support
 void handleSerialCommands() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
     
-    // Handle calibration commands first
+    // Handle MAX31865 commands first
+    if (command.startsWith("max_")) {
+      handleCalibrationCommands(command);
+      return;
+    }
+    
+    // Handle legacy calibration commands (redirect to MAX31865)
     if (command.startsWith("cal_")) {
       handleCalibrationCommands(command);
       return;
     }
     
     if (command == "test_meat") {
-      // Temporarily enable meat probe debug for testing
+      // Test meat probes
       bool oldDebug = getMeatProbesDebug();
       setMeatProbesDebug(true);
       
       testSpecificProbe();
       
-      // Restore previous debug setting
       setMeatProbesDebug(oldDebug);
     } else if (command == "test_ambient") {
       testAmbientSensor();
     } else if (command == "test_ambient_detailed") {
       testAmbientNTC();
     } else if (command == "test_grill") {
-      testGrillSensor();
+      testGrillSensor();  // Now tests MAX31865
     } else if (command == "diag") {
       runTemperatureDiagnostics();
     } else if (command == "status") {
@@ -251,6 +290,9 @@ void handleSerialCommands() {
       } else {
         Serial.printf("Found %d device(s)\n", deviceCount);
       }
+    } else if (command == "spi_test") {
+      Serial.println("\n=== MAX31865 SPI TEST ===");
+      grillSensor.testConnection();
     } else if (command.startsWith("calibrate_probe")) {
       // Example: calibrate_probe 1 72.5
       int spaceIndex1 = command.indexOf(' ');
@@ -290,21 +332,22 @@ void handleSerialCommands() {
       relay_print_status();
     } else if (command == "help") {
       Serial.println("\nAvailable commands:");
-      Serial.println("=== CALIBRATION COMMANDS ===");
-      Serial.println("  cal_help        - Show calibration help");
-      Serial.println("  cal_status      - Show calibration status");
-      Serial.println("  cal_test        - Test current temperature reading");
-      Serial.println("  cal_set2 <temp> - Set second calibration point");
-      Serial.println("  cal_reset       - Reset calibration to defaults");
+      Serial.println("=== MAX31865 RTD COMMANDS ===");
+      Serial.println("  max_help        - Show MAX31865 commands");
+      Serial.println("  max_status      - Show MAX31865 status");
+      Serial.println("  max_test        - Test MAX31865 connection");
+      Serial.println("  max_diag        - Detailed MAX31865 diagnostics");
+      Serial.println("  max_cal_offset <temp> - Calibrate to known temperature");
+      Serial.println("  max_debug_on/off - Toggle MAX31865 debug output");
       Serial.println("");
       Serial.println("=== DIAGNOSTIC COMMANDS ===");
       Serial.println("  test_meat       - Test all meat probes individually");
       Serial.println("  test_ambient    - Test ambient sensor 10 times");
-      Serial.println("  test_ambient_detailed - Detailed NTC test");
-      Serial.println("  test_grill      - Test grill sensor 10 times");
+      Serial.println("  test_grill      - Test MAX31865 grill sensor");
       Serial.println("  diag            - Run full temperature diagnostics");
       Serial.println("  status          - Print current system status");
       Serial.println("  i2c_scan        - Scan I2C bus for devices");
+      Serial.println("  spi_test        - Test MAX31865 SPI communication");
       Serial.println("");
       Serial.println("=== DEBUG COMMANDS ===");
       Serial.println("  debug_meat_on/off    - Toggle meat probe debug");
@@ -343,20 +386,6 @@ void testAmbientSensor() {
     
     Serial.printf("Reading %d: ADC=%d, V=%.3f, R=%.0fΩ\n", 
                   i + 1, adc, voltage, resistance);
-    delay(500);
-  }
-}
-
-void testGrillSensor() {
-  Serial.println("\n=== TESTING GRILL SENSOR (CALIBRATED) ===");
-  
-  for (int i = 0; i < 10; i++) {
-    int adc = analogRead(GRILL_TEMP_PIN);
-    float voltage = (adc / 4095.0) * 5.0;
-    double temp = readGrillTemperature();
-    
-    Serial.printf("Reading %d: ADC=%d, V=%.3f, Temp=%.1f°F\n", 
-                  i + 1, adc, voltage, temp);
     delay(500);
   }
 }

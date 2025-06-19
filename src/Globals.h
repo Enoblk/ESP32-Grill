@@ -1,4 +1,4 @@
-// Globals.h - Final configuration with correct pin assignments for 5V system
+// Globals.h - Updated for MAX31865 RTD sensor
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
@@ -6,6 +6,10 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
+
+// Forward declare the MAX31865 sensor
+class MAX31865Sensor;
+extern MAX31865Sensor grillSensor;
 
 // ===== I2C PIN DEFINITIONS =====
 #define SDA_PIN 21
@@ -16,11 +20,16 @@
 #define RELAY_IGNITER_PIN     27  // GPIO27 - Igniter relay
 #define RELAY_AUGER_PIN       26  // GPIO26 - Auger motor relay  
 #define RELAY_HOPPER_FAN_PIN  25  // GPIO25 - Hopper fan relay
-#define RELAY_BLOWER_FAN_PIN  14  // GPIO14 - Blower fan relay
+#define RELAY_BLOWER_FAN_PIN  5  // GPIO14 - Blower fan relay
 
-// Temperature sensor pins (CORRECTED for 5V system)
-#define GRILL_TEMP_PIN 35     // GPIO35 - Main grill temperature (PT100 + 150Ω) - 5V reference
-#define AMBIENT_TEMP_PIN 36   // GPIO36 - Ambient temperature (10K NTC + 10KΩ pullup) - 5V reference
+// ===== HSPI PIN DEFINITIONS FOR MAX31865 =====
+#define MAX31865_CS_PIN   4      // GPIO15 - Chip Select
+#define MAX31865_CLK_PIN  14      // GPIO14 - HSPI CLK  
+#define MAX31865_MOSI_PIN 13      // GPIO13 - HSPI MOSI
+#define MAX31865_MISO_PIN 12      // GPIO12 - HSPI MISO
+
+// Ambient temperature sensor pin (keep existing 10K NTC)
+#define AMBIENT_TEMP_PIN 36       // GPIO36 - Ambient temperature (10K NTC + 10KΩ pullup) - 5V reference
 
 // ADS1115 channels for meat probes (high precision 1K NTC with 10K pullups, 5V reference)
 #define MEAT_PROBE_1_CHANNEL 0  // ADS1115 A0 - Meat probe 1
@@ -34,6 +43,12 @@
 
 // Built-in LED for status
 #define LED_BUILTIN 2
+
+// ===== MAX31865 CONFIGURATION =====
+// PT100 RTD reference resistor (usually 430Ω for PT100)
+#define RREF 430.0
+// Nominal resistance of PT100 at 0°C
+#define RNOMINAL 100.0
 
 // ===== SYSTEM STATE VARIABLES =====
 extern bool grillRunning;
@@ -59,13 +74,10 @@ extern Preferences preferences;
 #define STATUS_PRINT_INTERVAL 10000 // Status printed every 10 seconds
 
 // ===== VOLTAGE REFERENCE CONSTANTS =====
-// IMPORTANT: These reflect your hardware change to 5V reference
-#define ADC_REFERENCE_VOLTAGE 5.0   // Changed from 3.3V to 5V
+// For ambient sensor (still using ADC)
+#define ADC_REFERENCE_VOLTAGE 5.0   // 5V reference for ambient sensor
 
 // ===== FUNCTION DECLARATIONS =====
-// Note: Main function declarations are in their respective header files
-// Only declare functions that don't have their own headers here
-
 void save_setpoint();
 void load_setpoint();
 
