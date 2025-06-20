@@ -1,10 +1,10 @@
-// Utility.h - Updated with missing function declaration
+// Utility.h - Minimal header for simple temperature reading
 #ifndef UTILITY_H
 #define UTILITY_H
 
 #include <Arduino.h>
 
-// Individual debug control flags
+// Debug control flags
 extern bool debugGrillSensor;
 extern bool debugAmbientSensor; 
 extern bool debugMeatProbes;
@@ -16,11 +16,15 @@ double readTemperature();
 double readGrillTemperature();         
 double readAmbientTemperature();       
 String getStatus(double temp);
-
-// UNIFIED TEMPERATURE VALIDATION FUNCTION
 bool isValidTemperature(double temp);
 
-// Individual debug control functions
+
+
+void testSpecificProbe();
+void testAmbientSensor();
+
+
+// Debug control functions
 void setGrillDebug(bool enabled);
 void setAmbientDebug(bool enabled);
 void setMeatProbesDebug(bool enabled);
@@ -35,26 +39,24 @@ bool getMeatProbesDebug();
 bool getRelayDebug();
 bool getSystemDebug();
 
-// MAX31865 CALIBRATION SYSTEM
+// Simple calibration system
 void setupTemperatureCalibration();
-void saveCalibrationData();
-void loadCalibrationData();
 void printCalibrationStatus();
-void resetCalibration();
 void handleCalibrationCommands(String command);
 
-// Temperature diagnostics
+// Diagnostic functions
+void runTemperatureDiagnostics();
+void testGrillSensor();
+
+// Compatibility functions
+void resetCalibration();
+void saveCalibrationData();
+void loadCalibrationData();
 void printTemperatureDiagnostics();
-void runTemperatureDiagnostics();      
-void debugTemperatureLoop();           
+void debugTemperatureLoop();
 void testAmbientNTC();
-void testGrillSensor();  // ADD THIS MISSING FUNCTION DECLARATION
-
-// Settings functions  
-void save_setpoint();
-void load_setpoint();
-
-// Legacy compatibility
+void testSpecificProbe();
+void testAmbientSensor();
 void setTemperatureDebugMode(bool enabled);
 bool isDebugModeEnabled();
 

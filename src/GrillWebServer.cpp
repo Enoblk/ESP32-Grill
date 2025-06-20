@@ -429,6 +429,36 @@ void setup_grill_server() {
     html += "<button class='btn btn-danger' onclick='controlRelay(\"ignite\", \"off\")'>Turn OFF</button>";
     html += "</div>";
     
+// Auger
+html += "<div class='relay-control'>";
+html += "<div class='relay-status'>";
+html += "<div class='status-dot " + String(augerOn ? "status-on" : "status-off") + "'></div>";
+html += "<h3>Auger</h3>";
+html += "</div>";
+html += "<button class='btn' onclick='controlRelay(\"auger\", \"on\")'>Turn ON</button>";
+html += "<button class='btn btn-danger' onclick='controlRelay(\"auger\", \"off\")'>Turn OFF</button>";
+html += "</div>";
+
+// Hopper Fan
+html += "<div class='relay-control'>";
+html += "<div class='relay-status'>";
+html += "<div class='status-dot " + String(hopperOn ? "status-on" : "status-off") + "'></div>";
+html += "<h3>Hopper Fan</h3>";
+html += "</div>";
+html += "<button class='btn' onclick='controlRelay(\"hopper\", \"on\")'>Turn ON</button>";
+html += "<button class='btn btn-danger' onclick='controlRelay(\"hopper\", \"off\")'>Turn OFF</button>";
+html += "</div>";
+
+// Blower Fan
+html += "<div class='relay-control'>";
+html += "<div class='relay-status'>";
+html += "<div class='status-dot " + String(blowerOn ? "status-on" : "status-off") + "'></div>";
+html += "<h3>Blower Fan</h3>";
+html += "</div>";
+html += "<button class='btn' onclick='controlRelay(\"blower\", \"on\")'>Turn ON</button>";
+html += "<button class='btn btn-danger' onclick='controlRelay(\"blower\", \"off\")'>Turn OFF</button>";
+html += "</div>";
+
     // Add other relay controls...
     
     html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 20px 0; text-decoration: none;'>Back to Dashboard</a>";
@@ -521,9 +551,9 @@ void setup_grill_server() {
     // Get current readings
     float temp = grillSensor.readTemperatureF();
     float resistance = grillSensor.readRTD();
-    uint16_t rawValue = grillSensor.readRTDRaw();
-    uint8_t fault = grillSensor.readFault();
-    bool connected = grillSensor.isConnected();
+   // uint16_t rawValue = grillSensor.readRTDRaw();
+    //uint8_t fault = grillSensor.readFault();
+    //bool connected = grillSensor.isConnected();
     
     // Temperature reading
     String tempClass = (temp > 32.0 && temp < 600.0) ? "good" : "bad";
@@ -540,31 +570,7 @@ void setup_grill_server() {
     html += "<div class='value'>" + String(resistance, 2) + " Ω</div>";
     html += "<div>Expected: ~108Ω at 70°F, ~138Ω at 200°F</div>";
     html += "</div>";
-    
-    // Raw value
-    html += "<div class='reading good'>";
-    html += "<h3>📊 Raw RTD Value</h3>";
-    html += "<div class='value'>0x" + String(rawValue, HEX) + " (" + String(rawValue) + ")</div>";
-    html += "</div>";
-    
-    // Connection status
-    String connClass = connected ? "good" : "bad";
-    html += "<div class='reading " + connClass + "'>";
-    html += "<h3>🔌 Connection Status</h3>";
-    html += "<div class='value'>" + String(connected ? "✅ CONNECTED" : "❌ DISCONNECTED") + "</div>";
-    html += "</div>";
-    
-    // Fault status
-    String faultClass = (fault == 0) ? "good" : "bad";
-    html += "<div class='reading " + faultClass + "'>";
-    html += "<h3>⚠️ Fault Status</h3>";
-    if (fault == 0) {
-      html += "<div class='value'>✅ No Faults</div>";
-    } else {
-      html += "<div class='value'>❌ Fault: 0x" + String(fault, HEX) + "</div>";
-      html += "<div>" + grillSensor.getFaultDescription(fault) + "</div>";
-    }
-    html += "</div>";
+  
     
     // Control buttons
     html += "<div style='text-align: center; margin: 30px 0;'>";
@@ -755,93 +761,31 @@ void setup_grill_server() {
     req->send(200, "text/plain", sensor + " debug " + (enabled ? "enabled" : "disabled"));
   });
 
-  // MAX31865 specific endpoints
-  server.on("/max31865_test", HTTP_GET, [](AsyncWebServerRequest *req) {
-    String result = "MAX31865 Test Results:\\n";
-    result += "Temperature: " + String(grillSensor.readTemperatureF(), 1) + "°F\\n";
-    result += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
-    result += "Raw Value: 0x" + String(grillSensor.readRTDRaw(), HEX) + "\\n";
-    result += "Connected: " + String(grillSensor.isConnected() ? "YES" : "NO") + "\\n";
+ 
+ // server.on("/cal_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+  //  String status = "MAX31865 RTD Sensor Status:\\n";
+ //   status += "Temperature: " + String(grillSensor.readTemperatureF(), 1) + "°F\\n";
+  //  status += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
+ //   status += "Connected: " + String(grillSensor.isConnected() ? "YES" : "NO") + "\\n";
+ //   status += "Status: Professional RTD interface - minimal calibration needed";
     
-    if (grillSensor.hasFault()) {
-      result += "Fault: " + grillSensor.getFaultString();
-    } else {
-      result += "Status: OK - No faults detected";
-    }
-    
-    req->send(200, "text/plain", result);
-  });
+  //  req->send(200, "text/plain", status);
+  //});
 
-  server.on("/max31865_clear", HTTP_GET, [](AsyncWebServerRequest *req) {
-    grillSensor.clearFault();
-    req->send(200, "text/plain", "MAX31865 faults cleared");
-  });
-
-  // Legacy calibration endpoints (now use MAX31865)
-  server.on("/cal_test", HTTP_GET, [](AsyncWebServerRequest *req) {
-    float temp = grillSensor.readTemperatureF();
-    
-    String result = "MAX31865 Reading:\\n";
-    result += "Temperature: " + String(temp, 1) + "°F\\n";
-    result += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
-    result += "Status: " + String(grillSensor.isConnected() ? "CONNECTED" : "ERROR");
-    
-    req->send(200, "text/plain", result);
-  });
-
-  server.on("/cal_current", HTTP_GET, [](AsyncWebServerRequest *req) {
-    float temp = grillSensor.readTemperatureF();
-    
-    String json = "{";
-    json += "\"temp\":" + String(temp, 1) + ",";
-    json += "\"resistance\":" + String(grillSensor.readRTD(), 2) + ",";
-    json += "\"connected\":" + String(grillSensor.isConnected() ? "true" : "false");
-    json += "}";
-    
-    req->send(200, "application/json", json);
-  });
-
-  server.on("/cal_set_point2", HTTP_POST, [](AsyncWebServerRequest *req) {
-    if (!req->hasParam("temp")) {
-      req->send(400, "text/plain", "Missing temperature parameter");
-      return;
-    }
-    
-    float measuredTemp = req->getParam("temp")->value().toFloat();
-    
-    if (measuredTemp < 50.0 || measuredTemp > 800.0) {
-      req->send(400, "text/plain", "Temperature out of range (50-800°F)");
-      return;
-    }
-    
-    grillSensor.calibrateOffset(measuredTemp);
-    req->send(200, "text/plain", "MAX31865 calibrated to " + String(measuredTemp, 1) + "°F");
-  });
-
-  server.on("/cal_status", HTTP_GET, [](AsyncWebServerRequest *req) {
-    String status = "MAX31865 RTD Sensor Status:\\n";
-    status += "Temperature: " + String(grillSensor.readTemperatureF(), 1) + "°F\\n";
-    status += "Resistance: " + String(grillSensor.readRTD(), 2) + "Ω\\n";
-    status += "Connected: " + String(grillSensor.isConnected() ? "YES" : "NO") + "\\n";
-    status += "Status: Professional RTD interface - minimal calibration needed";
-    
-    req->send(200, "text/plain", status);
-  });
-
-  server.on("/cal_reset", HTTP_POST, [](AsyncWebServerRequest *req) {
-    grillSensor.setCalibration(0.0, 1.0);
-    req->send(200, "text/plain", "MAX31865 calibration reset to defaults");
-  });
+  //server.on("/cal_reset", HTTP_POST, [](AsyncWebServerRequest *req) {
+   // grillSensor.setCalibration(0.0, 1.0);
+   // req->send(200, "text/plain", "MAX31865 calibration reset to defaults");
+  //});
 
   // System diagnostics endpoint
   server.on("/diagnostics", HTTP_GET, [](AsyncWebServerRequest *req) {
     String diag = "System Diagnostics:\\n";
     diag += "Grill Temperature: " + String(readGrillTemperature(), 1) + "F (MAX31865)\\n";
     diag += "Ambient Temperature: " + String(readAmbientTemperature(), 1) + "F\\n";
-    diag += "MAX31865 Status: " + String(grillSensor.isConnected() ? "OK" : "ERROR") + "\\n";
-    if (grillSensor.hasFault()) {
-      diag += "MAX31865 Fault: " + grillSensor.getFaultString() + "\\n";
-    }
+    //diag += "MAX31865 Status: " + String(grillSensor.isConnected() ? "OK" : "ERROR") + "\\n";
+    //if (grillSensor.hasFault()) {
+    //  diag += "MAX31865 Fault: " + grillSensor.getFaultString() + "\\n";
+   // }
     diag += "Grill Running: " + String(grillRunning ? "YES" : "NO") + "\\n";
     diag += "Free Memory: " + String(ESP.getFreeHeap()) + " bytes\\n";
     diag += "Uptime: " + String(millis() / 1000) + " seconds\\n";
@@ -931,10 +875,10 @@ server.on("/spi_test", HTTP_GET, [](AsyncWebServerRequest *req) {
   html += "<div class='test-section'>";
   html += "<h3>📍 Current Pin Configuration</h3>";
   html += "<div class='test-result'>";
-  html += "CS Pin: GPIO" + String(MAX31865_CS_PIN) + "<br>";
-  html += "CLK Pin: GPIO" + String(MAX31865_CLK_PIN) + "<br>";
-  html += "MOSI Pin: GPIO" + String(MAX31865_MOSI_PIN) + "<br>";
-  html += "MISO Pin: GPIO" + String(MAX31865_MISO_PIN) + "<br>";
+  //html += "CS Pin: GPIO" + String(MAX31865_CS_PIN) + "<br>";
+  //html += "CLK Pin: GPIO" + String(MAX31865_CLK_PIN) + "<br>";
+  //html += "MOSI Pin: GPIO" + String(MAX31865_MOSI_PIN) + "<br>";
+  //html += "MISO Pin: GPIO" + String(MAX31865_MISO_PIN) + "<br>";
   html += "</div>";
   html += "</div>";
   
@@ -1034,10 +978,10 @@ server.on("/spi_test", HTTP_GET, [](AsyncWebServerRequest *req) {
 });
 
 // SPI Test execution endpoint
-server.on("/spi_test_run", HTTP_GET, [](AsyncWebServerRequest *req) {
-  String result = grillSensor.getSPITestResults();
-  req->send(200, "text/plain", result);
-});
+//server.on("/spi_test_run", HTTP_GET, [](AsyncWebServerRequest *req) {
+//  String result = grillSensor.getSPITestResults();
+//  req->send(200, "text/plain", result);
+//});
 
 // Register dump endpoint
 server.on("/spi_register_dump", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -1104,19 +1048,19 @@ server.on("/spi_pin_test", HTTP_GET, [](AsyncWebServerRequest *req) {
 });
 
 // SPI reset endpoint
-server.on("/spi_reset", HTTP_GET, [](AsyncWebServerRequest *req) {
+//server.on("/spi_reset", HTTP_GET, [](AsyncWebServerRequest *req) {
   // Reinitialize SPI
-  SPI.end();
-  delay(100);
-  SPI.begin(MAX31865_CLK_PIN, MAX31865_MISO_PIN, MAX31865_MOSI_PIN);
-  delay(100);
+ // SPI.end();
+ // delay(100);
+ // SPI.begin(MAX31865_CLK_PIN, MAX31865_MISO_PIN, MAX31865_MOSI_PIN);
+ // delay(100);
   
   // Reset CS pin
-  pinMode(MAX31865_CS_PIN, OUTPUT);
-  digitalWrite(MAX31865_CS_PIN, HIGH);
+ // pinMode(MAX31865_CS_PIN, OUTPUT);
+ // digitalWrite(MAX31865_CS_PIN, HIGH);
   
-  req->send(200, "text/plain", "SPI reset complete");
-});
+ // req->send(200, "text/plain", "SPI reset complete");
+//});
 
   server.begin();
   Serial.println("Web server started with MAX31865 support");
