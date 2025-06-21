@@ -1,46 +1,9 @@
-// PelletControl.h - Advanced PID-based Pellet Feed Control
-#ifndef PELLETCONTROL_H
-#define PELLETCONTROL_H
-
-#include <Arduino.h>
-
-// PID Controller structure
-struct PIDController {
-  float kp, ki, kd;           // PID coefficients
-  float integral;             // Integral accumulator
-  float previous_error;       // Previous error for derivative
-  float output;               // Current PID output
-  unsigned long last_time;    // Last calculation time
-  float output_min, output_max; // Output limits
-};
-
-// Pellet feed control functions
-void pellet_init();
-void pellet_feed_loop();
-void pellet_set_target(double target);
-double pellet_get_target();
-
-// PID functions
-void setPIDParameters(float kp, float ki, float kd);
-void getPIDParameters(float* kp, float* ki, float* kd);
-float calculatePID(PIDController* pid, float setpoint, float measurement);
-void resetPID(PIDController* pid);
-
-// Feed timing and control
-void pellet_calculate_feed_time(double temperature_error);
-void pellet_execute_feed_cycle();
-
-// Status and diagnostics
-String pellet_get_status();
-void pellet_print_diagnostics();
-
-#endif
-
-// PelletControl.cpp - Implementation
+// PelletControl.cpp - Complete file with adjustable ignition feed parameters
 #include "PelletControl.h"
 #include "Globals.h"
 #include "Utility.h"
 #include "RelayControl.h"
+#include "Ignition.h"
 
 // PID controller instance
 static PIDController pid;
@@ -53,13 +16,20 @@ static unsigned long feedInterval = 60000; // Base feed interval (1 minute)
 static bool feedCycleActive = false;
 static unsigned long feedCycleStartTime = 0;
 
+// ADJUSTABLE PELLET FEED PARAMETERS FOR IGNITION
+// These can be modified via web interface for better ignition performance
+static unsigned long initialFeedDuration = 45000;    // 45 seconds initial feed (was 30s)
+static unsigned long lightingFeedDuration = 20000;   // 20 seconds during lighting cycles (was 15s)
+static unsigned long normalFeedDuration = 5000;      // 5 seconds for normal operation
+static unsigned long lightingFeedInterval = 60000;   // 60 seconds between lighting feeds (was 90s)
+
 // Feed timing parameters (optimized for Daniel Boone)
 #define MIN_FEED_TIME 1000      // Minimum auger on time (1 second)
-#define MAX_FEED_TIME 15000     // Maximum auger on time (15 seconds)
-#define MIN_FEED_INTERVAL 30000 // Minimum time between feeds (30 seconds)
+#define MAX_FEED_TIME 60000     // Maximum auger on time (60 seconds - increased for ignition)
+#define MIN_FEED_INTERVAL 15000 // Minimum time between feeds (15 seconds)
 #define MAX_FEED_INTERVAL 300000 // Maximum time between feeds (5 minutes)
 
-// Temperature-based feed curves
+// Temperature-based feed curves for normal operation
 struct FeedCurve {
   double tempError;  // Temperature error (setpoint - actual)
   unsigned long feedTime;  // Auger on time in milliseconds
@@ -83,7 +53,7 @@ static const FeedCurve feedCurves[] = {
 #define FEED_CURVE_SIZE (sizeof(feedCurves) / sizeof(feedCurves[0]))
 
 void pellet_init() {
-  Serial.println("Initializing pellet control system...");
+  Serial.println("Initializing enhanced pellet control system...");
   
   // Initialize PID controller with Daniel Boone optimized parameters
   pid.kp = 1.5;      // Proportional gain
@@ -98,8 +68,16 @@ void pellet_init() {
   lastFeedTime = millis();
   feedCycleActive = false;
   
+  // Load pellet feed parameters from preferences
+  loadPelletParameters();
+  
   Serial.printf("PID initialized: Kp=%.2f, Ki=%.3f, Kd=%.2f\n", pid.kp, pid.ki, pid.kd);
-  Serial.println("Pellet control system ready");
+  Serial.printf("Pellet feed parameters:\n");
+  Serial.printf("  Initial feed: %lu ms (%.1f sec)\n", initialFeedDuration, initialFeedDuration / 1000.0);
+  Serial.printf("  Lighting feed: %lu ms (%.1f sec)\n", lightingFeedDuration, lightingFeedDuration / 1000.0);
+  Serial.printf("  Normal feed: %lu ms (%.1f sec)\n", normalFeedDuration, normalFeedDuration / 1000.0);
+  Serial.printf("  Lighting interval: %lu ms (%.1f sec)\n", lightingFeedInterval, lightingFeedInterval / 1000.0);
+  Serial.println("Enhanced pellet control system ready");
 }
 
 void pellet_feed_loop() {
@@ -131,7 +109,7 @@ void pellet_feed_loop() {
       feedCycleActive = false;
       lastFeedTime = now;
       
-      Serial.printf("Feed cycle complete: %lu ms\n", feedDuration);
+      Serial.printf("🌾 Feed cycle complete: %lu ms\n", feedDuration);
     }
     return; // Wait for current cycle to complete
   }
@@ -141,7 +119,13 @@ void pellet_feed_loop() {
     return; // Too soon for next feed
   }
   
-  // Calculate feed parameters based on temperature error
+  // Special handling during ignition phases
+  if (ignition_get_state() != IGNITION_OFF && ignition_get_state() != IGNITION_COMPLETE) {
+    pellet_handle_ignition_feeding(now);
+    return;
+  }
+  
+  // Normal operation: Calculate feed parameters based on temperature error
   pellet_calculate_feed_time(tempError);
   
   // Determine if we should feed based on calculated interval
@@ -152,16 +136,54 @@ void pellet_feed_loop() {
   // Debug output every 30 seconds
   static unsigned long lastDebug = 0;
   if (now - lastDebug >= 30000) {
-    Serial.printf("Pellet Control: Temp=%.1f°F, Target=%.1f°F, Error=%.1f°F, PID=%.1f, Next feed in %lu sec\n",
+    Serial.printf("🌾 Pellet Control: Temp=%.1f°F, Target=%.1f°F, Error=%.1f°F, PID=%.1f, Next feed in %lu sec\n",
                   currentTemp, targetTemp, tempError, pidOutput,
                   (feedInterval - (now - lastFeedTime)) / 1000);
     lastDebug = now;
   }
 }
 
+void pellet_handle_ignition_feeding(unsigned long now) {
+  IgnitionState currentState = ignition_get_state();
+  
+  switch (currentState) {
+    case IGNITION_INITIAL_FEED:
+      // Use longer initial feed duration for better ignition
+      if (now - lastFeedTime >= 5000) { // Check every 5 seconds during initial feed
+        feedDuration = initialFeedDuration;
+        pellet_execute_feed_cycle();
+        Serial.printf("🔥 IGNITION: Initial feed cycle (%lu ms)\n", initialFeedDuration);
+      }
+      break;
+      
+    case IGNITION_LIGHTING:
+      // Periodic longer feeds during lighting phase
+      if (now - lastFeedTime >= lightingFeedInterval) {
+        feedDuration = lightingFeedDuration;
+        pellet_execute_feed_cycle();
+        Serial.printf("🔥 IGNITION: Lighting feed cycle (%lu ms)\n", lightingFeedDuration);
+      }
+      break;
+      
+    case IGNITION_FLAME_DETECT:
+    case IGNITION_STABILIZE:
+      // Continue with lighting feeds but less frequently
+      if (now - lastFeedTime >= (lightingFeedInterval * 1.5)) {
+        feedDuration = lightingFeedDuration / 2; // Shorter feeds during stabilization
+        pellet_execute_feed_cycle();
+        Serial.printf("🔥 IGNITION: Stabilizing feed cycle (%lu ms)\n", feedDuration);
+      }
+      break;
+      
+    default:
+      // Fall back to normal operation
+      break;
+  }
+}
+
 void pellet_calculate_feed_time(double tempError) {
   // Find appropriate feed curve
-  feedDuration = MIN_FEED_TIME;
+  feedDuration = normalFeedDuration; // Use adjustable normal feed duration
   feedInterval = MAX_FEED_INTERVAL;
   
   for (int i = 0; i < FEED_CURVE_SIZE - 1; i++) {
@@ -193,7 +215,7 @@ void pellet_execute_feed_cycle() {
     feedCycleActive = true;
     feedCycleStartTime = millis();
     
-    Serial.printf("Starting feed cycle: %lu ms duration\n", feedDuration);
+    Serial.printf("🌾 Starting feed cycle: %lu ms duration\n", feedDuration);
   } else {
     // No feed needed, just update timing
     lastFeedTime = millis();
@@ -289,16 +311,84 @@ String pellet_get_status() {
 }
 
 void pellet_print_diagnostics() {
-  Serial.println("\n=== PELLET CONTROL DIAGNOSTICS ===");
+  Serial.println("\n=== ENHANCED PELLET CONTROL DIAGNOSTICS ===");
   Serial.printf("Target Temperature: %.1f°F\n", targetTemp);
   Serial.printf("Current Temperature: %.1f°F\n", readTemperature());
   Serial.printf("Temperature Error: %.1f°F\n", targetTemp - readTemperature());
   Serial.printf("PID Output: %.1f\n", pid.output);
   Serial.printf("PID Parameters: Kp=%.2f, Ki=%.3f, Kd=%.2f\n", pid.kp, pid.ki, pid.kd);
-  Serial.printf("Feed Duration: %lu ms\n", feedDuration);
-  Serial.printf("Feed Interval: %lu ms\n", feedInterval);
+  Serial.printf("Current Feed Duration: %lu ms\n", feedDuration);
+  Serial.printf("Current Feed Interval: %lu ms\n", feedInterval);
   Serial.printf("Feed Cycle Active: %s\n", feedCycleActive ? "YES" : "NO");
   Serial.printf("Time Since Last Feed: %lu sec\n", (millis() - lastFeedTime) / 1000);
+  Serial.printf("Ignition State: %s\n", ignition_get_status_string().c_str());
   Serial.printf("Status: %s\n", pellet_get_status().c_str());
-  Serial.println("=====================================\n");
+  
+  Serial.println("\n--- ADJUSTABLE IGNITION PARAMETERS ---");
+  Serial.printf("Initial Feed Duration: %lu ms (%.1f sec)\n", initialFeedDuration, initialFeedDuration / 1000.0);
+  Serial.printf("Lighting Feed Duration: %lu ms (%.1f sec)\n", lightingFeedDuration, lightingFeedDuration / 1000.0);
+  Serial.printf("Normal Feed Duration: %lu ms (%.1f sec)\n", normalFeedDuration, normalFeedDuration / 1000.0);
+  Serial.printf("Lighting Feed Interval: %lu ms (%.1f sec)\n", lightingFeedInterval, lightingFeedInterval / 1000.0);
+  Serial.println("==========================================\n");
+}
+
+// Functions to get/set adjustable pellet parameters
+unsigned long pellet_get_initial_feed_duration() {
+  return initialFeedDuration;
+}
+
+unsigned long pellet_get_lighting_feed_duration() {
+  return lightingFeedDuration;
+}
+
+unsigned long pellet_get_normal_feed_duration() {
+  return normalFeedDuration;
+}
+
+unsigned long pellet_get_lighting_feed_interval() {
+  return lightingFeedInterval;
+}
+
+void pellet_set_initial_feed_duration(unsigned long duration) {
+  initialFeedDuration = constrain(duration, 10000, 120000); // 10s to 2 minutes
+  savePelletParameters();
+  Serial.printf("Initial feed duration set to %lu ms (%.1f sec)\n", initialFeedDuration, initialFeedDuration / 1000.0);
+}
+
+void pellet_set_lighting_feed_duration(unsigned long duration) {
+  lightingFeedDuration = constrain(duration, 5000, 60000); // 5s to 1 minute
+  savePelletParameters();
+  Serial.printf("Lighting feed duration set to %lu ms (%.1f sec)\n", lightingFeedDuration, lightingFeedDuration / 1000.0);
+}
+
+void pellet_set_normal_feed_duration(unsigned long duration) {
+  normalFeedDuration = constrain(duration, 1000, 30000); // 1s to 30s
+  savePelletParameters();
+  Serial.printf("Normal feed duration set to %lu ms (%.1f sec)\n", normalFeedDuration, normalFeedDuration / 1000.0);
+}
+
+void pellet_set_lighting_feed_interval(unsigned long interval) {
+  lightingFeedInterval = constrain(interval, 30000, 180000); // 30s to 3 minutes
+  savePelletParameters();
+  Serial.printf("Lighting feed interval set to %lu ms (%.1f sec)\n", lightingFeedInterval, lightingFeedInterval / 1000.0);
+}
+
+void savePelletParameters() {
+  preferences.begin("pellet", false);
+  preferences.putULong("initialFeed", initialFeedDuration);
+  preferences.putULong("lightingFeed", lightingFeedDuration);
+  preferences.putULong("normalFeed", normalFeedDuration);
+  preferences.putULong("lightingInt", lightingFeedInterval);
+  preferences.end();
+  Serial.println("Pellet parameters saved to flash");
+}
+
+void loadPelletParameters() {
+  preferences.begin("pellet", true);
+  initialFeedDuration = preferences.getULong("initialFeed", 45000);
+  lightingFeedDuration = preferences.getULong("lightingFeed", 20000);
+  normalFeedDuration = preferences.getULong("normalFeed", 5000);
+  lightingFeedInterval = preferences.getULong("lightingInt", 60000);
+  preferences.end();
+  Serial.println("Pellet parameters loaded from flash");
 }

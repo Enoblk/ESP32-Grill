@@ -14,15 +14,13 @@
 #include <ElegantOTA.h>
 
 void setup_grill_server() {
-  // Main dashboard with all 6 temperatures
+  // Main dashboard with all 6 temperatures and REAL-TIME relay updates
+// REPLACE the main dashboard route in GrillWebServer.cpp with this properly escaped version:
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    // Get grill temperature (MAX31865)
+    // Get all sensor data
     double grillTemp = readGrillTemperature();
-    
-    // Get ambient temperature (10K NTC)
     double ambientTemp = readAmbientTemperature();
-    
-    // Get meat probe temperatures (1K NTC via ADS1115)
     float meat1 = tempSensor.getFoodTemperature(1);
     float meat2 = tempSensor.getFoodTemperature(2);
     float meat3 = tempSensor.getFoodTemperature(3);
@@ -30,9 +28,9 @@ void setup_grill_server() {
     
     String status = getStatus(grillTemp);
     bool ignOn = digitalRead(RELAY_IGNITER_PIN) == HIGH;
-    bool augerOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
-    bool hopperOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
-    bool blowerOn = digitalRead(RELAY_BLOWER_FAN_PIN) == HIGH;
+    bool augOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
+    bool hopOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
+    bool bloOn = digitalRead(RELAY_BLOWER_FAN_PIN) == HIGH;
     
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='utf-8'>";
@@ -45,15 +43,11 @@ void setup_grill_server() {
     html += ".container { max-width: 800px; margin: 0 auto; }";
     html += ".header { text-align: center; margin-bottom: 20px; }";
     html += ".header h1 { font-size: 2em; margin-bottom: 10px; }";
-    
-    // Main grill temperature display
     html += ".grill-temp { background: rgba(255,255,255,0.15); border-radius: 15px; ";
     html += "padding: 20px; margin-bottom: 20px; text-align: center; border: 2px solid #4ade80; }";
     html += ".grill-temp-main { font-size: 3em; font-weight: bold; margin-bottom: 10px; }";
     html += ".grill-temp-set { font-size: 1.2em; margin-bottom: 10px; }";
     html += ".status { font-size: 1.3em; font-weight: bold; padding: 10px; border-radius: 10px; }";
-    
-    // All temperature grid
     html += ".temp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 20px 0; }";
     html += ".temp-card { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; text-align: center; }";
     html += ".temp-card.grill { border: 2px solid #4ade80; }";
@@ -63,10 +57,10 @@ void setup_grill_server() {
     html += ".temp-value { font-size: 1.8em; font-weight: bold; margin-bottom: 5px; }";
     html += ".temp-type { font-size: 0.8em; opacity: 0.7; }";
     html += ".temp-invalid { color: #ef4444; }";
-    
     html += ".controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }";
     html += ".btn { padding: 15px; font-size: 1.1em; font-weight: bold; border: none; ";
     html += "border-radius: 10px; color: white; cursor: pointer; text-align: center; text-decoration: none; display: block; }";
+    html += ".btn:disabled { opacity: 0.6; cursor: not-allowed; }";
     html += ".btn-primary { background: #667eea; }";
     html += ".btn-danger { background: #f093fb; }";
     html += ".btn-success { background: #4facfe; }";
@@ -77,8 +71,8 @@ void setup_grill_server() {
     html += ".relays { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }";
     html += ".relay { display: flex; align-items: center; padding: 12px; ";
     html += "background: rgba(255,255,255,0.1); border-radius: 10px; }";
-    html += ".relay-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; }";
-    html += ".relay-on { background: #4ade80; }";
+    html += ".relay-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; transition: all 0.3s ease; }";
+    html += ".relay-on { background: #4ade80; box-shadow: 0 0 10px #4ade80; }";
     html += ".relay-off { background: #6b7280; }";
     html += ".link-btn { display: inline-block; margin: 5px; padding: 8px 15px; ";
     html += "background: rgba(255,255,255,0.2); color: white; text-decoration: none; border-radius: 5px; }";
@@ -93,35 +87,26 @@ void setup_grill_server() {
     html += "<h1>Green Mountain Grill</h1>";
     html += "<div>Daniel Boone Controller - MAX31865 RTD</div>";
     html += "<div>IP: " + WiFi.localIP().toString() + "</div>";
-    
-    // Navigation links
     html += "<div style='margin: 15px 0;'>";
     html += "<a href='/wifi' class='link-btn'>WiFi Settings</a>";
     html += "<a href='/manual' class='link-btn'>Manual Control</a>";
     html += "<a href='/pid' class='link-btn'>PID Tuning</a>";
     html += "<a href='/debug' class='link-btn'>Debug</a>";
     html += "<a href='/update' class='link-btn'>OTA Update</a>";
-    html += "<a href='/max31865' class='link-btn'>🌡️ MAX31865 Sensor</a>";
-    html += "<a href='/reboot' class='link-btn'>Reboot</a>";
-    html += "<a href='/spi_test' class='link-btn'>spi test</a>";
-    html += "</div>";
-    html += "</div>";
+    html += "<a href='/grill_debug' class='link-btn'>Debug Info</a>";
+    html += "</div></div>";
     
-    // Speed control selector
     html += "<div style='margin: 10px 0; text-align: center;'>";
-    html += "<label style='color: #bbb; font-size: 0.9em;'>";
-    html += "Update Speed: ";
+    html += "<label style='color: #bbb; font-size: 0.9em;'>Update Speed: ";
     html += "<select id='updateSpeed' onchange='changeUpdateSpeed()' style='background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 2px;'>";
     html += "<option value='1000'>Fast (1s)</option>";
     html += "<option value='1500' selected>Normal (1.5s)</option>";
     html += "<option value='3000'>Slow (3s)</option>";
     html += "<option value='5000'>Very Slow (5s)</option>";
     html += "<option value='0'>Paused</option>";
-    html += "</select>";
-    html += "</label>";
-    html += "</div>";
+    html += "</select></label></div>";
 
-    // Main grill temperature display (prominent)
+    // Main grill temperature display
     html += "<div class='grill-temp'>";
     if (isValidTemperature(grillTemp)) {
       html += "<div class='temp-value' id='grill-temp-main'>" + String(grillTemp, 1) + "&deg;F</div>";
@@ -129,83 +114,66 @@ void setup_grill_server() {
       html += "<div class='temp-value temp-invalid'>ERROR</div>";
     }
     html += "<div class='grill-temp-set'>Target: <span id='setpoint'>" + String((int)setpoint) + "</span>&deg;F</div>";
-    
     String statusClass = status;
     statusClass.toLowerCase();
     statusClass.replace(" ", "-");
     html += "<div class='status " + statusClass + "' id='status'>" + status + "</div>";
     html += "</div>";
     
-    // All 6 temperatures grid
+    // Temperature grid
     html += "<div class='temp-grid'>";
     
-    // Grill Temperature
-    html += "<div class='temp-card grill'>";
-    html += "<h3>GRILL TEMPERATURE</h3>";
+    // Grill Temperature Card
+    html += "<div class='temp-card grill'><h3>GRILL TEMPERATURE</h3>";
     if (isValidTemperature(grillTemp)) {
       html += "<div class='temp-value' id='grill-temp-card'>" + String(grillTemp, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>ERROR</div>";
     }
-    html += "<div class='temp-type'>MAX31865 RTD</div>";
-    html += "</div>";
+    html += "<div class='temp-type'>MAX31865 RTD</div></div>";
     
-    // Ambient Temperature
-    html += "<div class='temp-card ambient'>";
-    html += "<h3>AMBIENT</h3>";
+    // Ambient Temperature Card
+    html += "<div class='temp-card ambient'><h3>AMBIENT</h3>";
     if (ambientTemp > -900) {
       html += "<div class='temp-value' id='ambient-temp'>" + String(ambientTemp, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>N/A</div>";
     }
-    html += "<div class='temp-type'>10K NTC</div>";
-    html += "</div>";
+    html += "<div class='temp-type'>10K NTC</div></div>";
     
-    // Meat Probe 1
-    html += "<div class='temp-card meat'>";
-    html += "<h3>MEAT PROBE 1</h3>";
+    // Meat Probe Cards
+    html += "<div class='temp-card meat'><h3>MEAT PROBE 1</h3>";
     if (meat1 > -900) {
       html += "<div class='temp-value' id='meat1-temp'>" + String(meat1, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>N/A</div>";
     }
-    html += "<div class='temp-type'>1K NTC</div>";
-    html += "</div>";
+    html += "<div class='temp-type'>1K NTC</div></div>";
     
-    // Meat Probe 2
-    html += "<div class='temp-card meat'>";
-    html += "<h3>MEAT PROBE 2</h3>";
+    html += "<div class='temp-card meat'><h3>MEAT PROBE 2</h3>";
     if (meat2 > -900) {
       html += "<div class='temp-value' id='meat2-temp'>" + String(meat2, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>N/A</div>";
     }
-    html += "<div class='temp-type'>1K NTC</div>";
-    html += "</div>";
+    html += "<div class='temp-type'>1K NTC</div></div>";
     
-    // Meat Probe 3
-    html += "<div class='temp-card meat'>";
-    html += "<h3>MEAT PROBE 3</h3>";
+    html += "<div class='temp-card meat'><h3>MEAT PROBE 3</h3>";
     if (meat3 > -900) {
       html += "<div class='temp-value' id='meat3-temp'>" + String(meat3, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>N/A</div>";
     }
-    html += "<div class='temp-type'>1K NTC</div>";
-    html += "</div>";
+    html += "<div class='temp-type'>1K NTC</div></div>";
     
-    // Meat Probe 4
-    html += "<div class='temp-card meat'>";
-    html += "<h3>MEAT PROBE 4</h3>";
+    html += "<div class='temp-card meat'><h3>MEAT PROBE 4</h3>";
     if (meat4 > -900) {
       html += "<div class='temp-value' id='meat4-temp'>" + String(meat4, 1) + "&deg;F</div>";
     } else {
       html += "<div class='temp-value temp-invalid'>N/A</div>";
     }
-    html += "<div class='temp-type'>1K NTC</div>";
-    html += "</div>";
-    
-    html += "</div>";
+    html += "<div class='temp-type'>1K NTC</div></div>";
+    html += "</div>"; // End temp-grid
     
     // Temperature presets
     html += "<div class='temp-presets'>";
@@ -218,7 +186,7 @@ void setup_grill_server() {
     html += "</div>";
     
     // Control buttons
-    html += "<div class='controls'>";
+    html += "<div class='controls' id='controls'>";
     if (grillRunning) {
       html += "<button class='btn btn-danger' onclick='stopGrill()'>STOP Grill</button>";
     } else {
@@ -229,34 +197,21 @@ void setup_grill_server() {
     
     // Relay status
     html += "<div class='relays'>";
-    html += "<div class='relay'>";
-    html += "<div class='relay-dot " + String(ignOn ? "relay-on" : "relay-off") + "' id='ign-dot'></div>";
-    html += "<span>Igniter</span></div>";
-    html += "<div class='relay'>";
-    html += "<div class='relay-dot " + String(augerOn ? "relay-on" : "relay-off") + "' id='aug-dot'></div>";
-    html += "<span>Auger</span></div>";
-    html += "<div class='relay'>";
-    html += "<div class='relay-dot " + String(hopperOn ? "relay-on" : "relay-off") + "' id='hop-dot'></div>";
-    html += "<span>Hopper Fan</span></div>";
-    html += "<div class='relay'>";
-    html += "<div class='relay-dot " + String(blowerOn ? "relay-on" : "relay-off") + "' id='blo-dot'></div>";
-    html += "<span>Blower Fan</span></div>";
+    html += "<div class='relay'><div class='relay-dot " + String(ignOn ? "relay-on" : "relay-off") + "' id='igniter-dot'></div><span>Igniter</span></div>";
+    html += "<div class='relay'><div class='relay-dot " + String(augOn ? "relay-on" : "relay-off") + "' id='auger-dot'></div><span>Auger</span></div>";
+    html += "<div class='relay'><div class='relay-dot " + String(hopOn ? "relay-on" : "relay-off") + "' id='hopper-dot'></div><span>Hopper Fan</span></div>";
+    html += "<div class='relay'><div class='relay-dot " + String(bloOn ? "relay-on" : "relay-off") + "' id='blower-dot'></div><span>Blower Fan</span></div>";
     html += "</div>";
-    
-    html += "</div>";
+    html += "</div>"; // End container
 
-    // JavaScript for functionality and REAL-TIME auto-updates
+    // JavaScript - properly escaped
     html += "<script>";
     html += "let updateInterval;";
     html += "let isPageVisible = true;";
 
     html += "document.addEventListener('visibilitychange', function() {";
     html += "  isPageVisible = !document.hidden;";
-    html += "  if (isPageVisible) {";
-    html += "    startRealTimeUpdates();";
-    html += "  } else {";
-    html += "    stopRealTimeUpdates();";
-    html += "  }";
+    html += "  if (isPageVisible) startRealTimeUpdates(); else stopRealTimeUpdates();";
     html += "});";
 
     html += "function startRealTimeUpdates() {";
@@ -268,112 +223,125 @@ void setup_grill_server() {
     html += "}";
 
     html += "function stopRealTimeUpdates() {";
-    html += "  if (updateInterval) {";
-    html += "    clearInterval(updateInterval);";
-    html += "    updateInterval = null;";
-    html += "  }";
+    html += "  if (updateInterval) { clearInterval(updateInterval); updateInterval = null; }";
     html += "}";
 
     html += "function updateTemperatures() {";
     html += "  if (!isPageVisible) return;";
-    html += "  ";
-    html += "  fetch('/status_all')";
-    html += "    .then(response => {";
-    html += "      if (!response.ok) throw new Error('Network response was not ok');";
-    html += "      return response.json();";
-    html += "    })";
-    html += "    .then(data => {";
-
-    // Update main grill temperature
-    html += "      const grillTempElement = document.getElementById('grill-temp-main');";
-    html += "      const grillTempCardElement = document.getElementById('grill-temp-card');";
-    html += "      ";
-    html += "      if (data.grillTemp > 0) {";
-    html += "        const newTemp = data.grillTemp.toFixed(1);";
-    html += "        if (grillTempElement.innerHTML !== newTemp + '&deg;F') {";
-    html += "          grillTempElement.innerHTML = newTemp + '&deg;F';";
-    html += "          grillTempCardElement.innerHTML = newTemp + '&deg;F';";
-    html += "          grillTempElement.style.transition = 'color 0.3s ease';";
-    html += "          grillTempElement.style.color = '#4ade80';";
-    html += "          setTimeout(() => { grillTempElement.style.color = ''; }, 300);";
-    html += "        }";
-    html += "        grillTempElement.className = 'temp-value';";
-    html += "        grillTempCardElement.className = 'temp-value';";
+    html += "  fetch('/status_all').then(response => {";
+    html += "    if (!response.ok) throw new Error('Network error');";
+    html += "    return response.json();";
+    html += "  }).then(data => {";
+    html += "    const grillTempElement = document.getElementById('grill-temp-main');";
+    html += "    const grillTempCardElement = document.getElementById('grill-temp-card');";
+    html += "    if (data.grillTemp > 0) {";
+    html += "      const newTemp = data.grillTemp.toFixed(1);";
+    html += "      grillTempElement.innerHTML = newTemp + '&deg;F';";
+    html += "      grillTempCardElement.innerHTML = newTemp + '&deg;F';";
+    html += "      grillTempElement.className = 'temp-value';";
+    html += "      grillTempCardElement.className = 'temp-value';";
+    html += "    } else {";
+    html += "      grillTempElement.innerHTML = 'ERROR';";
+    html += "      grillTempCardElement.innerHTML = 'ERROR';";
+    html += "      grillTempElement.className = 'temp-value temp-invalid';";
+    html += "      grillTempCardElement.className = 'temp-value temp-invalid';";
+    html += "    }";
+    html += "    const ambientTempElement = document.getElementById('ambient-temp');";
+    html += "    if (data.ambientTemp > -900) {";
+    html += "      ambientTempElement.innerHTML = data.ambientTemp.toFixed(1) + '&deg;F';";
+    html += "      ambientTempElement.className = 'temp-value';";
+    html += "    } else {";
+    html += "      ambientTempElement.innerHTML = 'N/A';";
+    html += "      ambientTempElement.className = 'temp-value temp-invalid';";
+    html += "    }";
+    html += "    ['meat1', 'meat2', 'meat3', 'meat4'].forEach((probe, index) => {";
+    html += "      const temp = data[probe + 'Temp'];";
+    html += "      const element = document.getElementById(probe + '-temp');";
+    html += "      if (temp > -900) {";
+    html += "        element.innerHTML = temp.toFixed(1) + '&deg;F';";
+    html += "        element.className = 'temp-value';";
     html += "      } else {";
-    html += "        grillTempElement.innerHTML = 'SENSOR ERROR';";
-    html += "        grillTempCardElement.innerHTML = 'ERROR';";
-    html += "        grillTempElement.className = 'temp-value temp-invalid';";
-    html += "        grillTempCardElement.className = 'temp-value temp-invalid';";
+    html += "        element.innerHTML = 'N/A';";
+    html += "        element.className = 'temp-value temp-invalid';";
     html += "      }";
-
-    // Update other temperatures and controls
-    html += "      const ambientTempElement = document.getElementById('ambient-temp');";
-    html += "      if (data.ambientTemp > -900) {";
-    html += "        ambientTempElement.innerHTML = data.ambientTemp.toFixed(1) + '&deg;F';";
-    html += "        ambientTempElement.className = 'temp-value';";
-    html += "      } else {";
-    html += "        ambientTempElement.innerHTML = 'N/A';";
-    html += "        ambientTempElement.className = 'temp-value temp-invalid';";
-    html += "      }";
-
-    html += "      ['meat1', 'meat2', 'meat3', 'meat4'].forEach((probe, index) => {";
-    html += "        const temp = data[probe + 'Temp'];";
-    html += "        const element = document.getElementById(probe + '-temp');";
-    html += "        if (temp > -900) {";
-    html += "          element.innerHTML = temp.toFixed(1) + '&deg;F';";
-    html += "          element.className = 'temp-value';";
-    html += "        } else {";
-    html += "          element.innerHTML = 'N/A';";
-    html += "          element.className = 'temp-value temp-invalid';";
-    html += "        }";
-    html += "      });";
-
-    html += "      document.getElementById('setpoint').textContent = data.setpoint;";
-    html += "      document.getElementById('status').textContent = data.status;";
-
-    html += "      const relays = [";
-    html += "        {id: 'ign-dot', state: data.ignOn},";
-    html += "        {id: 'aug-dot', state: data.augerOn},";
-    html += "        {id: 'hop-dot', state: data.hopperOn},";
-    html += "        {id: 'blo-dot', state: data.blowerOn}";
-    html += "      ];";
-    html += "      relays.forEach(relay => {";
-    html += "        const element = document.getElementById(relay.id);";
-    html += "        element.className = 'relay-dot ' + (relay.state ? 'relay-on' : 'relay-off');";
-    html += "      });";
-
-    html += "    })";
-    html += "    .catch(err => console.log('Update failed:', err));";
+    html += "    });";
+    html += "    document.getElementById('setpoint').textContent = data.setpoint;";
+    html += "    document.getElementById('status').textContent = data.status;";
+    html += "    const igniterDot = document.getElementById('igniter-dot');";
+    html += "    const augerDot = document.getElementById('auger-dot');"; 
+    html += "    const hopperDot = document.getElementById('hopper-dot');";
+    html += "    const blowerDot = document.getElementById('blower-dot');";
+    html += "    if (igniterDot) igniterDot.className = 'relay-dot ' + (data.ignOn ? 'relay-on' : 'relay-off');";
+    html += "    if (augerDot) augerDot.className = 'relay-dot ' + (data.augerOn ? 'relay-on' : 'relay-off');";
+    html += "    if (hopperDot) hopperDot.className = 'relay-dot ' + (data.hopperOn ? 'relay-on' : 'relay-off');";
+    html += "    if (blowerDot) blowerDot.className = 'relay-dot ' + (data.blowerOn ? 'relay-on' : 'relay-off');";
+    html += "    updateControlButtons(data.grillRunning);";
+    html += "  }).catch(err => console.log('Update failed:', err));";
     html += "}";
 
-    html += "function changeUpdateSpeed() {";
-    html += "  stopRealTimeUpdates();";
-    html += "  startRealTimeUpdates();";
+    html += "function updateControlButtons(grillRunning) {";
+    html += "  const controlsDiv = document.getElementById('controls');";
+    html += "  if (grillRunning) {";
+    html += "    controlsDiv.innerHTML = '<button class=\"btn btn-danger\" onclick=\"stopGrill()\">STOP Grill</button><button class=\"btn btn-primary\" onclick=\"adjustTemp()\">Adjust Temp</button>';";
+    html += "  } else {";
+    html += "    controlsDiv.innerHTML = '<button class=\"btn btn-success\" onclick=\"startGrill()\">START Grill</button><button class=\"btn btn-primary\" onclick=\"adjustTemp()\">Adjust Temp</button>';";
+    html += "  }";
     html += "}";
+
+    html += "function changeUpdateSpeed() { stopRealTimeUpdates(); startRealTimeUpdates(); }";
 
     html += "function setTemp(temp) {";
     html += "  document.getElementById('setpoint').textContent = temp;";
-    html += "  fetch('/set_temp?temp=' + temp)";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => console.log(data));";
+    html += "  fetch('/set_temp?temp=' + temp).then(response => response.text()).then(data => {";
+    html += "    console.log('Temperature set');";
+    html += "  }).catch(error => alert('Error setting temperature'));";
     html += "}";
 
     html += "function startGrill() {";
-    html += "  fetch('/start')";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => console.log(data));";
+    html += "  const button = event.target;";
+    html += "  button.disabled = true;";
+    html += "  button.textContent = 'Starting...';";
+    html += "  fetch('/start').then(response => {";
+    html += "    if (!response.ok) throw new Error('HTTP ' + response.status);";
+    html += "    return response.text();";
+    html += "  }).then(data => {";
+    html += "    alert('Grill Started: ' + data);";
+    html += "    updateTemperatures();";
+    html += "  }).catch(error => {";
+    html += "    alert('Error starting grill: ' + error.message);";
+    html += "    button.disabled = false;";
+    html += "    button.textContent = 'START Grill';";
+    html += "  });";
     html += "}";
 
     html += "function stopGrill() {";
-    html += "  fetch('/stop')";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => console.log(data));";
+    html += "  if (!confirm('Stop the grill?')) return;";
+    html += "  const button = event.target;";
+    html += "  button.disabled = true;";
+    html += "  button.textContent = 'Stopping...';";
+    html += "  fetch('/stop').then(response => {";
+    html += "    if (!response.ok) throw new Error('HTTP ' + response.status);";
+    html += "    return response.text();";
+    html += "  }).then(data => {";
+    html += "    alert('Grill Stopped: ' + data);";
+    html += "    updateTemperatures();";
+    html += "  }).catch(error => {";
+    html += "    alert('Error stopping grill: ' + error.message);";
+    html += "    button.disabled = false;";
+    html += "    button.textContent = 'STOP Grill';";
+    html += "  });";
     html += "}";
 
     html += "function adjustTemp() {";
-    html += "  const newTemp = prompt('Enter target temperature (150-500F):', document.getElementById('setpoint').textContent);";
-    html += "  if (newTemp && newTemp >= 150 && newTemp <= 500) {";
-    html += "    setTemp(parseInt(newTemp));";
+    html += "  const currentTemp = document.getElementById('setpoint').textContent;";
+    html += "  const newTemp = prompt('Enter target temperature (150-500F):', currentTemp);";
+    html += "  if (newTemp && !isNaN(newTemp)) {";
+    html += "    const temp = parseInt(newTemp);";
+    html += "    if (temp >= 150 && temp <= 500) {";
+    html += "      setTemp(temp);";
+    html += "    } else {";
+    html += "      alert('Temperature must be between 150F and 500F');";
+    html += "    }";
     html += "  }";
     html += "}";
 
@@ -381,8 +349,8 @@ void setup_grill_server() {
     html += "  startRealTimeUpdates();";
     html += "});";
 
-    html += "</script>";
-    html += "</body></html>";
+    html += "</script></body></html>";
+    
     req->send(200, "text/html", html);
   });
 
@@ -476,27 +444,237 @@ html += "</div>";
     req->send(200, "text/html", html);
   });
 
-  // PID Tuning Page
+  // ADD THIS TO YOUR EXISTING GrillWebServer.cpp - REPLACE THE PID PAGE SECTION
+
+  // Enhanced PID Tuning and Pellet Control Page
   server.on("/pid", HTTP_GET, [](AsyncWebServerRequest *req) {
     float kp, ki, kd;
     getPIDParameters(&kp, &ki, &kd);
     
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='utf-8'>";
-    html += "<title>PID Tuning</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>PID Tuning & Pellet Control</title>";
     html += "<style>";
     html += "body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; padding: 20px; }";
-    html += ".container { max-width: 600px; margin: 0 auto; }";
-    html += ".btn { padding: 15px 30px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer; }";
+    html += ".container { max-width: 800px; margin: 0 auto; }";
+    html += "h1 { color: #60a5fa; text-align: center; margin-bottom: 30px; }";
+    html += "h2 { color: #fbbf24; margin: 30px 0 15px 0; border-bottom: 2px solid #fbbf24; padding-bottom: 5px; }";
+    html += ".section { background: rgba(255,255,255,0.1); padding: 20px; margin: 20px 0; border-radius: 10px; }";
+    html += ".form-group { margin: 15px 0; display: flex; align-items: center; }";
+    html += "label { display: block; margin-bottom: 5px; font-weight: bold; min-width: 200px; }";
+    html += "input, select { padding: 8px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background: #333; color: #fff; margin-left: 10px; }";
+    html += "input[type='number'] { width: 120px; }";
+    html += ".btn { padding: 12px 25px; background: #059669; color: white; border: none; border-radius: 5px; font-size: 1em; cursor: pointer; margin: 10px 5px; }";
+    html += ".btn:hover { background: #047857; }";
+    html += ".btn-warning { background: #f59e0b; }";
+    html += ".btn-warning:hover { background: #d97706; }";
+    html += ".current-value { color: #4ade80; font-weight: bold; }";
+    html += ".description { font-size: 0.9em; color: #bbb; margin-top: 5px; }";
+    html += ".warning { background: #fbbf24; color: #000; padding: 15px; border-radius: 5px; margin: 15px 0; }";
     html += "</style></head><body>";
     
     html += "<div class='container'>";
-    html += "<h1>PID Tuning</h1>";
-    html += "<p>Current: Kp=" + String(kp, 3) + ", Ki=" + String(ki, 4) + ", Kd=" + String(kd, 3) + "</p>";
-    html += "<a href='/' class='btn'>Back to Dashboard</a>";
-    html += "</div></body></html>";
+    html += "<h1>🎛️ PID Tuning & Pellet Control</h1>";
+    
+    // PID Section
+    html += "<div class='section'>";
+    html += "<h2>PID Parameters</h2>";
+    html += "<div class='warning'>⚠️ <strong>WARNING:</strong> Incorrect PID values can cause temperature instability or poor performance.</div>";
+    
+    html += "<form onsubmit='savePID(event)'>";
+    html += "<div class='form-group'>";
+    html += "<label>Proportional (Kp):</label>";
+    html += "<input type='number' id='kp' step='0.1' min='0' max='10' value='" + String(kp, 2) + "'>";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(kp, 3) + "</span> - Controls immediate response to temperature error</div>";
+    html += "</div>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Integral (Ki):</label>";
+    html += "<input type='number' id='ki' step='0.001' min='0' max='1' value='" + String(ki, 4) + "'>";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(ki, 4) + "</span> - Eliminates steady-state error over time</div>";
+    html += "</div>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Derivative (Kd):</label>";
+    html += "<input type='number' id='kd' step='0.1' min='0' max='5' value='" + String(kd, 2) + "'>";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(kd, 3) + "</span> - Prevents overshoot and oscillation</div>";
+    html += "</div>";
+    
+    html += "<button type='submit' class='btn'>💾 Save PID Parameters</button>";
+    html += "<button type='button' class='btn btn-warning' onclick='resetPIDDefaults()'>🔄 Reset to Defaults</button>";
+    html += "</form>";
+    html += "</div>";
+    
+    // Pellet Feed Parameters Section
+    html += "<div class='section'>";
+    html += "<h2>🌾 Pellet Feed Parameters</h2>";
+    html += "<div class='warning'>🔥 <strong>IGNITION TUNING:</strong> Adjust these values to improve ignition performance. More pellets = better ignition but more smoke.</div>";
+    
+    // Get current pellet parameters
+    unsigned long initialFeed = pellet_get_initial_feed_duration();
+    unsigned long lightingFeed = pellet_get_lighting_feed_duration();
+    unsigned long normalFeed = pellet_get_normal_feed_duration();
+    unsigned long lightingInterval = pellet_get_lighting_feed_interval();
+    
+    html += "<form onsubmit='savePelletParams(event)'>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Initial Feed Duration:</label>";
+    html += "<input type='number' id='initialFeed' min='10' max='120' value='" + String(initialFeed / 1000) + "'> seconds";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(initialFeed / 1000) + "s</span> - First pellet feed when ignition starts (10-120s)</div>";
+    html += "</div>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Lighting Feed Duration:</label>";
+    html += "<input type='number' id='lightingFeed' min='5' max='60' value='" + String(lightingFeed / 1000) + "'> seconds";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(lightingFeed / 1000) + "s</span> - Pellet feed during lighting phase (5-60s)</div>";
+    html += "</div>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Normal Feed Duration:</label>";
+    html += "<input type='number' id='normalFeed' min='1' max='30' value='" + String(normalFeed / 1000) + "'> seconds";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(normalFeed / 1000) + "s</span> - Normal operation feed time (1-30s)</div>";
+    html += "</div>";
+    
+    html += "<div class='form-group'>";
+    html += "<label>Lighting Feed Interval:</label>";
+    html += "<input type='number' id='lightingInterval' min='30' max='180' value='" + String(lightingInterval / 1000) + "'> seconds";
+    html += "<div class='description'>Current: <span class='current-value'>" + String(lightingInterval / 1000) + "s</span> - Time between lighting feeds (30-180s)</div>";
+    html += "</div>";
+    
+    html += "<button type='submit' class='btn'>🌾 Save Pellet Parameters</button>";
+    html += "<button type='button' class='btn btn-warning' onclick='resetPelletDefaults()'>🔄 Reset Pellet Defaults</button>";
+    html += "</form>";
+    html += "</div>";
+    
+    // Current Status Section
+    html += "<div class='section'>";
+    html += "<h2>📊 Current Status</h2>";
+    html += "<div id='status-display'>";
+    html += "<p><strong>Grill Running:</strong> " + String(grillRunning ? "YES" : "NO") + "</p>";
+    html += "<p><strong>Target Temperature:</strong> " + String(setpoint, 1) + "°F</p>";
+    html += "<p><strong>Current Temperature:</strong> " + String(readGrillTemperature(), 1) + "°F</p>";
+    html += "<p><strong>Manual Override:</strong> " + String(relay_get_manual_override_status() ? "ACTIVE" : "INACTIVE") + "</p>";
+    html += "</div>";
+    html += "<button class='btn' onclick='refreshStatus()'>🔄 Refresh Status</button>";
+    html += "</div>";
+    
+    html += "<a href='/' class='btn' style='display: block; text-align: center; margin: 30px 0; text-decoration: none;'>← Back to Dashboard</a>";
+    html += "</div>";
+
+    // JavaScript functionality
+    html += "<script>";
+    
+    // Save PID parameters
+    html += "function savePID(event) {";
+    html += "  event.preventDefault();";
+    html += "  const kp = document.getElementById('kp').value;";
+    html += "  const ki = document.getElementById('ki').value;";
+    html += "  const kd = document.getElementById('kd').value;";
+    html += "  ";
+    html += "  fetch(`/set_pid?kp=${kp}&ki=${ki}&kd=${kd}`)";
+    html += "    .then(response => response.text())";
+    html += "    .then(data => {";
+    html += "      alert('PID Parameters Saved: ' + data);";
+    html += "      setTimeout(() => location.reload(), 1000);";
+    html += "    });";
+    html += "}";
+    
+    // Save pellet parameters
+    html += "function savePelletParams(event) {";
+    html += "  event.preventDefault();";
+    html += "  const initialFeed = document.getElementById('initialFeed').value;";
+    html += "  const lightingFeed = document.getElementById('lightingFeed').value;";
+    html += "  const normalFeed = document.getElementById('normalFeed').value;";
+    html += "  const lightingInterval = document.getElementById('lightingInterval').value;";
+    html += "  ";
+    html += "  fetch(`/set_pellet_params?initial=${initialFeed}&lighting=${lightingFeed}&normal=${normalFeed}&interval=${lightingInterval}`)";
+    html += "    .then(response => response.text())";
+    html += "    .then(data => {";
+    html += "      alert('Pellet Parameters Saved: ' + data);";
+    html += "      setTimeout(() => location.reload(), 1000);";
+    html += "    });";
+    html += "}";
+    
+    // Reset functions
+    html += "function resetPIDDefaults() {";
+    html += "  if (confirm('Reset PID to default values? (Kp=1.5, Ki=0.01, Kd=0.5)')) {";
+    html += "    fetch('/set_pid?kp=1.5&ki=0.01&kd=0.5')";
+    html += "      .then(response => response.text())";
+    html += "      .then(data => {";
+    html += "        alert('PID Reset to Defaults');";
+    html += "        location.reload();";
+    html += "      });";
+    html += "  }";
+    html += "}";
+    
+    html += "function resetPelletDefaults() {";
+    html += "  if (confirm('Reset pellet parameters to defaults?')) {";
+    html += "    fetch('/set_pellet_params?initial=45&lighting=20&normal=5&interval=60')";
+    html += "      .then(response => response.text())";
+    html += "      .then(data => {";
+    html += "        alert('Pellet Parameters Reset to Defaults');";
+    html += "        location.reload();";
+    html += "      });";
+    html += "  }";
+    html += "}";
+    
+    // Status refresh
+    html += "function refreshStatus() {";
+    html += "  location.reload();";
+    html += "}";
+    
+    html += "</script>";
+    html += "</body></html>";
     
     req->send(200, "text/html", html);
+  });
+
+  // New endpoint for setting pellet parameters
+  server.on("/set_pellet_params", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!req->hasParam("initial") || !req->hasParam("lighting") || 
+        !req->hasParam("normal") || !req->hasParam("interval")) {
+      req->send(400, "text/plain", "Missing pellet parameters");
+      return;
+    }
+    
+    unsigned long initial = req->getParam("initial")->value().toInt() * 1000; // Convert to ms
+    unsigned long lighting = req->getParam("lighting")->value().toInt() * 1000;
+    unsigned long normal = req->getParam("normal")->value().toInt() * 1000;
+    unsigned long interval = req->getParam("interval")->value().toInt() * 1000;
+    
+    // Validate ranges
+    if (initial < 10000 || initial > 120000) {
+      req->send(400, "text/plain", "Initial feed out of range (10-120s)");
+      return;
+    }
+    if (lighting < 5000 || lighting > 60000) {
+      req->send(400, "text/plain", "Lighting feed out of range (5-60s)");
+      return;
+    }
+    if (normal < 1000 || normal > 30000) {
+      req->send(400, "text/plain", "Normal feed out of range (1-30s)");
+      return;
+    }
+    if (interval < 30000 || interval > 180000) {
+      req->send(400, "text/plain", "Lighting interval out of range (30-180s)");
+      return;
+    }
+    
+    // Set the parameters
+    pellet_set_initial_feed_duration(initial);
+    pellet_set_lighting_feed_duration(lighting);
+    pellet_set_normal_feed_duration(normal);
+    pellet_set_lighting_feed_interval(interval);
+    
+    String response = "Pellet parameters updated: ";
+    response += "Initial=" + String(initial/1000) + "s, ";
+    response += "Lighting=" + String(lighting/1000) + "s, ";
+    response += "Normal=" + String(normal/1000) + "s, ";
+    response += "Interval=" + String(interval/1000) + "s";
+    
+    req->send(200, "text/plain", response);
   });
 
   // Debug Control Page
@@ -651,30 +829,150 @@ html += "</div>";
   });
 
   // Control endpoints
+  
+  // FIXED Control endpoints with proper error handling and debugging
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest *req) {
+    Serial.println("🚀 Web request: START grill");
+    
     if (grillRunning) {
+      Serial.println("   Grill already running");
       req->send(200, "text/plain", "Grill already running");
       return;
     }
     
-    grillRunning = true;
+    // Check for valid temperature reading before starting
     double currentTemp = readGrillTemperature();
+    if (!isValidTemperature(currentTemp)) {
+      Serial.println("   ERROR: Invalid temperature reading, cannot start");
+      req->send(400, "text/plain", "Cannot start: Invalid temperature sensor reading");
+      return;
+    }
+    
+    Serial.printf("   Starting grill at %.1f°F, target: %.1f°F\n", currentTemp, setpoint);
+    
+    // Set grill running flag
+    grillRunning = true;
+    
+    // Clear any manual overrides that might interfere
+    relay_clear_manual();
+    
+    // Start the ignition sequence
     ignition_start(currentTemp);
     
-    req->send(200, "text/plain", "Grill started - ignition sequence initiated");
+    Serial.println("   ✅ Grill started successfully - ignition sequence initiated");
+    req->send(200, "text/plain", "Grill started successfully - ignition sequence initiated");
   });
 
   server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *req) {
+    Serial.println("🛑 Web request: STOP grill");
+    
     if (!grillRunning) {
+      Serial.println("   Grill already stopped");
       req->send(200, "text/plain", "Grill already stopped");
       return;
     }
     
+    Serial.println("   Stopping grill and ignition sequence");
+    
+    // Stop grill operations
     grillRunning = false;
+    
+    // Stop ignition sequence
     ignition_stop();
+    
+    // Clear any manual overrides
     relay_clear_manual();
     
-    req->send(200, "text/plain", "Grill stopped - cooling down");
+    // Turn off all relays safely
+    RelayRequest stopReq = {RELAY_OFF, RELAY_OFF, RELAY_ON, RELAY_ON}; // Keep fans on for cooling
+    relay_request_auto(&stopReq);
+    
+    Serial.println("   ✅ Grill stopped successfully - cooling down");
+    req->send(200, "text/plain", "Grill stopped successfully - cooling down");
+  });
+
+  // Enhanced status endpoint with detailed grill state
+  server.on("/status_all", HTTP_GET, [](AsyncWebServerRequest *req) {
+    double grillTemp = readGrillTemperature();
+    double ambientTemp = readAmbientTemperature();
+    float meat1 = tempSensor.getFoodTemperature(1);
+    float meat2 = tempSensor.getFoodTemperature(2);
+    float meat3 = tempSensor.getFoodTemperature(3);
+    float meat4 = tempSensor.getFoodTemperature(4);
+    
+    bool ignOn = digitalRead(RELAY_IGNITER_PIN) == HIGH;
+    bool augerOn = digitalRead(RELAY_AUGER_PIN) == HIGH;
+    bool hopperOn = digitalRead(RELAY_HOPPER_FAN_PIN) == HIGH;
+    bool blowerOn = digitalRead(RELAY_BLOWER_FAN_PIN) == HIGH;
+    String status = getStatus(grillTemp);
+
+    String json = "{";
+    json += "\"grillTemp\":" + String(grillTemp, 1) + ",";
+    json += "\"ambientTemp\":" + String(ambientTemp, 1) + ",";
+    json += "\"meat1Temp\":" + String(meat1, 1) + ",";
+    json += "\"meat2Temp\":" + String(meat2, 1) + ",";
+    json += "\"meat3Temp\":" + String(meat3, 1) + ",";
+    json += "\"meat4Temp\":" + String(meat4, 1) + ",";
+    json += "\"setpoint\":" + String((int)setpoint) + ",";
+    json += "\"status\":\"" + status + "\",";
+    json += "\"grillRunning\":" + String(grillRunning ? "true" : "false") + ",";
+    json += "\"ignitionState\":\"" + ignition_get_status_string() + "\",";
+    json += "\"ignOn\":" + String(ignOn ? "true" : "false") + ",";
+    json += "\"augerOn\":" + String(augerOn ? "true" : "false") + ",";
+    json += "\"hopperOn\":" + String(hopperOn ? "true" : "false") + ",";
+    json += "\"blowerOn\":" + String(blowerOn ? "true" : "false") + ",";
+    json += "\"manualOverride\":" + String(relay_get_manual_override_status() ? "true" : "false");
+    json += "}";
+    
+    req->send(200, "application/json", json);
+  });
+
+  // Debug endpoint to check grill state
+  server.on("/grill_debug", HTTP_GET, [](AsyncWebServerRequest *req) {
+    String debug = "Grill Debug Info:\\n";
+    debug += "Grill Running: " + String(grillRunning ? "YES" : "NO") + "\\n";
+    debug += "Ignition State: " + ignition_get_status_string() + "\\n";
+    debug += "Grill Temperature: " + String(readGrillTemperature(), 1) + "°F\\n";
+    debug += "Target Temperature: " + String(setpoint, 1) + "°F\\n";
+    debug += "Manual Override: " + String(relay_get_manual_override_status() ? "ACTIVE" : "INACTIVE") + "\\n";
+    debug += "Free Memory: " + String(ESP.getFreeHeap()) + " bytes\\n";
+    debug += "\\nRelay States:\\n";
+    debug += "Igniter: " + String(digitalRead(RELAY_IGNITER_PIN) ? "ON" : "OFF") + "\\n";
+    debug += "Auger: " + String(digitalRead(RELAY_AUGER_PIN) ? "ON" : "OFF") + "\\n";
+    debug += "Hopper Fan: " + String(digitalRead(RELAY_HOPPER_FAN_PIN) ? "ON" : "OFF") + "\\n";
+    debug += "Blower Fan: " + String(digitalRead(RELAY_BLOWER_FAN_PIN) ? "ON" : "OFF") + "\\n";
+    
+    req->send(200, "text/plain", debug);
+  });
+
+  // Force start endpoint for troubleshooting
+  server.on("/force_start", HTTP_GET, [](AsyncWebServerRequest *req) {
+    Serial.println("🔧 FORCE START requested via web");
+    
+    grillRunning = true;
+    relay_clear_manual();
+    
+    // Get current temperature or use default
+    double currentTemp = readGrillTemperature();
+    if (!isValidTemperature(currentTemp)) {
+      currentTemp = 70.0; // Use room temperature as fallback
+      Serial.println("   Using fallback temperature for force start");
+    }
+    
+    ignition_start(currentTemp);
+    
+    req->send(200, "text/plain", "Force start completed");
+  });
+
+  // Force stop endpoint for troubleshooting  
+  server.on("/force_stop", HTTP_GET, [](AsyncWebServerRequest *req) {
+    Serial.println("🔧 FORCE STOP requested via web");
+    
+    grillRunning = false;
+    ignition_stop();
+    relay_emergency_stop();
+    
+    req->send(200, "text/plain", "Force stop completed");
   });
 
   // Manual relay control endpoints

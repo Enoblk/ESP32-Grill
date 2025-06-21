@@ -1,4 +1,4 @@
-// Globals.h - Minimal version with simple MAX31865 setup
+// Globals.h - Updated with new function declarations for debugging and pellet control
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
@@ -23,7 +23,7 @@ extern MAX31865Sensor grillSensor;
 #define RELAY_BLOWER_FAN_PIN  14  // GPIO14 - Blower fan relay
 
 // ===== MAX31865 PIN DEFINITIONS =====
-#define MAX31865_CS_PIN   5     // GPIO15 - Chip Select (avoid conflicts)
+#define MAX31865_CS_PIN   5     // GPIO5 - Chip Select
 // SPI uses default pins: SCK=18, MISO=19, MOSI=23
 
 // Other sensor pins
@@ -69,4 +69,23 @@ extern Preferences preferences;
 void save_setpoint();
 void load_setpoint();
 
-#endif
+// New debugging and pellet control function declarations
+extern bool relay_get_manual_override_status();
+extern unsigned long relay_get_manual_override_remaining();
+extern void relay_force_clear_manual();
+
+// Pellet control parameter functions
+extern unsigned long pellet_get_initial_feed_duration();
+extern unsigned long pellet_get_lighting_feed_duration();
+extern unsigned long pellet_get_normal_feed_duration();
+extern unsigned long pellet_get_lighting_feed_interval();
+
+extern void pellet_set_initial_feed_duration(unsigned long duration);
+extern void pellet_set_lighting_feed_duration(unsigned long duration);
+extern void pellet_set_normal_feed_duration(unsigned long duration);
+extern void pellet_set_lighting_feed_interval(unsigned long interval);
+
+extern void savePelletParameters();
+extern void loadPelletParameters();
+
+#endif // GLOBALS_H

@@ -1,4 +1,4 @@
-// Ignition.h - Advanced Ignition Sequence Control
+// Ignition.h - Complete file with all necessary declarations
 #ifndef IGNITION_H
 #define IGNITION_H
 
