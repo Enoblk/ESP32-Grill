@@ -1,4 +1,4 @@
-// Main.ino - Complete file with debugging and adjustable pellet feed parameters
+// Main.ino - Updated to use PiFire-style auger control
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -37,14 +37,14 @@ void setup() {
   delay(1000);
   
   Serial.println("\n=====================================");
-  Serial.println("ESP32 GRILL CONTROLLER - DEBUG VERSION");
+  Serial.println("ESP32 GRILL CONTROLLER - PIFIRE AUGER VERSION");
   Serial.println("=====================================");
   
   // CRITICAL: Print reset reason to understand restarts
   printResetReason();
   
   // Initialize watchdog timer for main task
-  esp_task_wdt_init(30, true); // 30 second timeout, panic on timeout
+  esp_task_wdt_init(60, true); // 60 second timeout (increased from 30)
   esp_task_wdt_add(NULL); // Add current task to watchdog
   
   // TEMPORARY: Disable brownout detector for testing
@@ -110,9 +110,9 @@ void setup() {
   pellet_init();
   Serial.println("✅ Pellet control initialized");
   
-  Serial.println("Initializing ignition system...");
+  Serial.println("Initializing ignition system with PiFire auger control...");
   ignition_init();
-  Serial.println("✅ Ignition system initialized");
+  Serial.println("✅ Ignition system with PiFire auger control initialized");
   
   Serial.println("Initializing button input...");
   button_init();
@@ -147,18 +147,17 @@ void setup() {
   
   esp_task_wdt_reset();
   
-  Serial.println("Setup complete! Debug version active!");
+  Serial.println("Setup complete! PiFire auger control version active!");
   
   // Show sensor status
   printCalibrationStatus();
   
-  Serial.println("\n🔧 DEBUG MODE FEATURES:");
-  Serial.println("- Reset reason detection");
-  Serial.println("- System health monitoring");
-  Serial.println("- Auger operation debugging");
-  Serial.println("- Memory and stack monitoring");
-  Serial.println("- Adjustable pellet feed parameters");
-  Serial.println("- Brownout detector temporarily disabled");
+  Serial.println("\n🔧 PIFIRE AUGER FEATURES:");
+  Serial.println("- Simple time-based auger cycling (15s ON / 60s OFF)");
+  Serial.println("- Separate auger control from ignition state machine");
+  Serial.println("- Manual prime function available");
+  Serial.println("- No complex auger trigger logic");
+  Serial.println("- Proven PiFire-style reliability");
   
   Serial.println("\n📋 AVAILABLE COMMANDS:");
   Serial.println("  test_temp       - Test 100Ω resistor reading");
@@ -167,12 +166,13 @@ void setup() {
   Serial.println("  relay_status    - Show relay status");
   Serial.println("  pellet_status   - Show pellet control status");
   Serial.println("  reset_reason    - Show last reset reason");
+  Serial.println("  prime_auger     - Manual 30-second auger prime");
   Serial.println("  help            - Show all commands");
   Serial.println("=====================================\n");
   
   // Final system check
   systemHealthy = true;
-  Serial.println("🚀 System ready and healthy!");
+  Serial.println("🚀 System ready with PiFire auger control!");
 }
 
 void loop() {
@@ -182,7 +182,7 @@ void loop() {
   
   unsigned long now = millis();
   
-  // Feed watchdog timer
+  // Feed watchdog timer more frequently
   feedWatchdog();
   
   // Monitor system health
@@ -215,11 +215,11 @@ void loop() {
     // Update meat probe sensors
     tempSensor.updateAll();
     
-    // Run ignition sequence if active
+    // Run ignition sequence (includes PiFire auger control)
     ignition_loop();
     
-    // Run pellet control if grill is running (with debugging)
-    debugPelletFeedLoop();
+    // REMOVED: All pellet control - PiFire auger control handles everything now
+    // NO MORE: debugPelletFeedLoop() or pellet_feed_loop()
     
     // Check for emergency conditions
     double grillTemp = readGrillTemperature();
@@ -301,52 +301,26 @@ void printResetReason() {
   Serial.println("========================\n");
 }
 
-void debugPelletFeedLoop() {
-  static unsigned long lastAugerState = 0;
-  static bool lastAugerValue = false;
-  static unsigned long augerOperationCount = 0;
-  
-  // Check if auger state changed
-  bool currentAugerValue = digitalRead(RELAY_AUGER_PIN);
-  if (currentAugerValue != lastAugerValue) {
-    augerOperationCount++;
-    
-    Serial.printf("🎯 AUGER STATE CHANGE #%lu: %s -> %s (time: %lu ms since last change)\n", 
-                  augerOperationCount,
-                  lastAugerValue ? "ON" : "OFF",
-                  currentAugerValue ? "ON" : "OFF",
-                  millis() - lastAugerState);
-    
-    // Log system state during auger operation
-    Serial.printf("   📊 System state: Free heap=%d, Stack remaining=%d\n", 
-                  ESP.getFreeHeap(), uxTaskGetStackHighWaterMark(NULL));
-    Serial.printf("   🕐 Uptime: %lu seconds\n", millis() / 1000);
-    Serial.printf("   🔧 Manual override: %s\n", relay_get_manual_override_status() ? "ACTIVE" : "INACTIVE");
-    
-    lastAugerState = millis();
-    lastAugerValue = currentAugerValue;
-    
-    // Small delay after auger state change to let system stabilize
-    delay(50);
-    
-    // Verify we're still alive
-    Serial.println("   ✅ System stable after auger state change");
-    
-    // Extra watchdog feed during critical operations
-    esp_task_wdt_reset();
-  }
-  
-  // Run the actual pellet feed loop
-  pellet_feed_loop();
-}
-
 void monitorSystemHealth() {
   if (millis() - lastHealthCheck > 5000) { // Every 5 seconds
     uint32_t freeHeap = ESP.getFreeHeap();
     UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);
     
-    Serial.printf("💗 Health: Heap=%d bytes, Stack=%d bytes, Uptime=%lu sec\n", 
-                  freeHeap, stackRemaining, millis() / 1000);
+    // Only print health info during issues or every 60 seconds
+    static unsigned long lastHealthPrint = 0;
+    bool shouldPrint = false;
+    
+    if (freeHeap < 15000 || stackRemaining < 1000) {
+      shouldPrint = true;
+    } else if (millis() - lastHealthPrint > 60000) {
+      shouldPrint = true;
+      lastHealthPrint = millis();
+    }
+    
+    if (shouldPrint) {
+      Serial.printf("💗 Health: Heap=%d bytes, Stack=%d bytes, Uptime=%lu sec\n", 
+                    freeHeap, stackRemaining, millis() / 1000);
+    }
     
     // Check for critically low memory
     if (freeHeap < 10000) {
@@ -360,38 +334,19 @@ void monitorSystemHealth() {
       systemHealthy = false;
     }
     
-    // Check relay states for inconsistencies
-    bool ignOn = digitalRead(RELAY_IGNITER_PIN);
-    bool augOn = digitalRead(RELAY_AUGER_PIN);
-    bool hopOn = digitalRead(RELAY_HOPPER_FAN_PIN);
-    bool bloOn = digitalRead(RELAY_BLOWER_FAN_PIN);
-    
-    static bool lastIgn = false, lastAug = false, lastHop = false, lastBlo = false;
-    static bool firstCheck = true;
-    
-    if (!firstCheck) {
-      if (ignOn != lastIgn) Serial.printf("🔧 Igniter changed: %s\n", ignOn ? "ON" : "OFF");
-      if (augOn != lastAug) Serial.printf("🔧 Auger changed: %s\n", augOn ? "ON" : "OFF");
-      if (hopOn != lastHop) Serial.printf("🔧 Hopper changed: %s\n", hopOn ? "ON" : "OFF");
-      if (bloOn != lastBlo) Serial.printf("🔧 Blower changed: %s\n", bloOn ? "ON" : "OFF");
-    }
-    
-    lastIgn = ignOn; lastAug = augOn; lastHop = hopOn; lastBlo = bloOn;
-    firstCheck = false;
-    
     lastHealthCheck = millis();
   }
 }
 
 void feedWatchdog() {
-  if (millis() - lastWatchdogFeed > 1000) { // Feed every second
+  if (millis() - lastWatchdogFeed > 500) { // Feed every 500ms (was 1000ms)
     esp_task_wdt_reset();
     lastWatchdogFeed = millis();
   }
 }
 
 void printSystemStatus() {
-  Serial.println("\n--- DETAILED SYSTEM STATUS ---");
+  Serial.println("\n--- SYSTEM STATUS (PIFIRE AUGER) ---");
   
   // System health
   Serial.printf("🏥 System Health: %s\n", systemHealthy ? "HEALTHY" : "⚠️ ISSUES DETECTED");
@@ -430,11 +385,13 @@ void printSystemStatus() {
   // System status
   Serial.printf("🔥 Grill: %s\n", grillRunning ? "RUNNING" : "STOPPED");
   if (grillRunning) {
-    Serial.printf("🚀 Ignition: %s\n", ignition_get_status_string().c_str());
-    Serial.printf("🌾 Pellet Control: %s\n", pellet_get_status().c_str());
+    if (ignition_get_state() != IGNITION_OFF && ignition_get_state() != IGNITION_COMPLETE) {
+      Serial.printf("🚀 Ignition: %s\n", ignition_get_status_string().c_str());
+    }
+    Serial.printf("🌾 PiFire Auger: %s\n", pifire_get_status().c_str());
   }
   
-  // Relay status with debugging info
+  // Relay status
   Serial.printf("🔌 Relays: IGN=%s AUG=%s HOP=%s BLO=%s\n",
                 digitalRead(RELAY_IGNITER_PIN) ? "ON" : "OFF",
                 digitalRead(RELAY_AUGER_PIN) ? "ON" : "OFF", 
@@ -453,13 +410,7 @@ void printSystemStatus() {
   }
   Serial.println();
   
-  // Pellet control parameters
-  Serial.printf("🌾 Pellet Feed: Initial=%lums, Lighting=%lums, Normal Cycle=%lums\n",
-                pellet_get_initial_feed_duration(),
-                pellet_get_lighting_feed_duration(), 
-                pellet_get_normal_feed_duration());
-  
-  Serial.println("------------------------------\n");
+  Serial.println("----------------------------------\n");
 }
 
 void handleSerialCommands() {
@@ -505,6 +456,8 @@ void handleSerialCommands() {
       relay_emergency_stop();
       grillRunning = false;
       Serial.println("Emergency stop activated!");
+    } else if (command == "prime_auger") {
+      pifire_manual_auger_prime();
     } else if (command == "restart") {
       Serial.println("Restarting ESP32...");
       delay(1000);
@@ -523,6 +476,9 @@ void handleSerialCommands() {
       Serial.println("  relay_status    - Show relay control status");
       Serial.println("  pellet_status   - Show pellet control diagnostics");
       Serial.println("  reset_reason    - Show last reset reason");
+      Serial.println("");
+      Serial.println("PIFIRE AUGER CONTROL:");
+      Serial.println("  prime_auger     - Manual 30-second auger prime");
       Serial.println("");
       Serial.println("DEBUG CONTROL:");
       Serial.println("  debug_on/off    - Toggle debug output");

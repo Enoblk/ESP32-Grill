@@ -38,7 +38,7 @@ extern MAX31865Sensor grillSensor;
 // Button pins
 #define BUTTON_UP_PIN     32  // GPIO32 - UP button
 #define BUTTON_DOWN_PIN   33  // GPIO33 - DOWN button  
-
+#define BUTTON_SELECT_PIN 39  // GPIO39 - Select button
 // Built-in LED
 #define LED_BUILTIN 2
 
