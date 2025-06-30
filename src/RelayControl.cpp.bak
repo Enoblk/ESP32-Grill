@@ -1,0 +1,283 @@
+// PelletControl.cpp - Clean, simple pellet control system
+#include "PelletControl.h"
+#include "Globals.h"
+#include "Utility.h"
+#include "RelayControl.h"
+
+// Simplified auger control state
+static AugerState augerState;
+static bool grillMode = false;  // false = startup/ignition, true = normal cooking
+
+void pellet_init() {
+  Serial.println("Initializing simplified pellet control...");
+  
+  // Initialize auger state
+  augerState.isRunning = false;
+  augerState.cycleStartTime = 0;
+  augerState.lastCycleEndTime = 0;
+  augerState.currentOnTime = DEFAULT_ON_TIME;
+  augerState.currentOffTime = DEFAULT_OFF_TIME;
+  augerState.cycleCount = 0;
+  
+  grillMode = false;
+  
+  // Load any saved settings
+  loadPelletSettings();
+  
+  Serial.println("✅ Pellet control initialized");
+  Serial.printf("Default timing: %d sec ON, %d sec OFF\n", 
+                DEFAULT_ON_TIME / 1000, DEFAULT_OFF_TIME / 1000);
+}
+
+void pellet_feed_loop() {
+  // Only run if grill is active
+  if (!grillRunning) {
+    // Make sure auger is off when grill is not running
+    if (augerState.isRunning) {
+      pellet_stop_auger();
+    }
+    return;
+  }
+  
+  unsigned long now = millis();
+  
+  // Simple state machine: either feeding or waiting
+  if (augerState.isRunning) {
+    // Check if current feed cycle should end
+    if (now - augerState.cycleStartTime >= augerState.currentOnTime) {
+      pellet_stop_auger();
+      augerState.lastCycleEndTime = now;
+      augerState.cycleCount++;
+      
+      Serial.printf("🌾 Pellet: Feed cycle #%lu complete (%lu sec)\n", 
+                    augerState.cycleCount, augerState.currentOnTime / 1000);
+    }
+  } else {
+    // Check if it's time to start next feed cycle
+    if (now - augerState.lastCycleEndTime >= augerState.currentOffTime) {
+      pellet_start_auger();
+    }
+  }
+  
+  // Adjust timing based on temperature error
+  pellet_adjust_timing();
+  
+  // Debug output every 30 seconds
+  static unsigned long lastDebug = 0;
+  if (now - lastDebug >= 30000) {
+    pellet_print_status();
+    lastDebug = now;
+  }
+}
+
+void pellet_start_auger() {
+  if (augerState.isRunning) return;
+  
+  // Turn on auger and hopper fan
+  RelayRequest feedReq = {RELAY_NOCHANGE, RELAY_ON, RELAY_ON, RELAY_NOCHANGE};
+  relay_request_auto(&feedReq);
+  
+  augerState.isRunning = true;
+  augerState.cycleStartTime = millis();
+  
+  Serial.printf("🌾 Pellet: Starting auger (%lu sec)\n", augerState.currentOnTime / 1000);
+}
+
+void pellet_stop_auger() {
+  if (!augerState.isRunning) return;
+  
+  // Turn off auger (keep hopper fan on)
+  RelayRequest stopReq = {RELAY_NOCHANGE, RELAY_OFF, RELAY_ON, RELAY_NOCHANGE};
+  relay_request_auto(&stopReq);
+  
+  augerState.isRunning = false;
+  
+  Serial.printf("🌾 Pellet: Stopping auger (%lu sec wait)\n", augerState.currentOffTime / 1000);
+}
+
+void pellet_adjust_timing() {
+  if (!grillRunning) return;
+  
+  double currentTemp = readGrillTemperature();
+  double targetTemp = setpoint;
+  
+  // Skip adjustment if we don't have valid temperature
+  if (!isValidTemperature(currentTemp)) return;
+  
+  double tempError = targetTemp - currentTemp;
+  
+  // SAFETY: Detect dangerous overheating
+  if (currentTemp > (targetTemp + 100.0)) {
+    Serial.println("🚨 SAFETY: Dangerous overheat detected - stopping auger");
+    pellet_emergency_stop();
+    return;
+  }
+  
+  // SAFETY: Detect potential backburn conditions
+  if (currentTemp > (targetTemp + 50.0) && augerState.isRunning) {
+    Serial.println("⚠️ SAFETY: High temp with auger running - extending off cycle");
+    augerState.currentOffTime = max(augerState.currentOffTime, 120000UL); // Minimum 2 min off
+  }
+  
+  // SAFETY: Monitor temperature rise rate
+  static double lastTemp = currentTemp;
+  double tempRiseRate = currentTemp - lastTemp;
+  
+  if (tempRiseRate > 10.0) { // More than 10°F rise in 30 seconds
+    Serial.println("⚠️ SAFETY: Rapid temp rise - stopping auger");
+    if (augerState.isRunning) {
+      pellet_stop_auger();
+      augerState.lastCycleEndTime = millis();
+      augerState.currentOffTime = 180000; // Force 3 min wait
+    }
+  }
+  lastTemp = currentTemp;
+  
+  // Temperature response curves
+  if (tempError > 75.0) {
+    // Way too cold - aggressive feeding
+    augerState.currentOnTime = MAX_ON_TIME;
+    augerState.currentOffTime = MIN_OFF_TIME;
+  } else if (tempError > 50.0) {
+    // Cold - more pellets
+    augerState.currentOnTime = 20000;  // 20 seconds
+    augerState.currentOffTime = 45000; // 45 seconds
+  } else if (tempError > 25.0) {
+    // Cool - slightly more
+    augerState.currentOnTime = 18000;  // 18 seconds
+    augerState.currentOffTime = 50000; // 50 seconds
+  } else if (tempError > 10.0) {
+    // Slightly cool
+    augerState.currentOnTime = 16000;  // 16 seconds
+    augerState.currentOffTime = 55000; // 55 seconds
+  } else if (tempError > -5.0) {
+    // At target - normal feeding
+    augerState.currentOnTime = DEFAULT_ON_TIME;   // 15 seconds
+    augerState.currentOffTime = DEFAULT_OFF_TIME; // 60 seconds
+  } else if (tempError > -15.0) {
+    // Slightly hot - less pellets
+    augerState.currentOnTime = 12000;  // 12 seconds
+    augerState.currentOffTime = 75000; // 75 seconds
+  } else if (tempError > -25.0) {
+    // Hot - much less
+    augerState.currentOnTime = 8000;   // 8 seconds
+    augerState.currentOffTime = 90000; // 90 seconds
+  } else {
+    // Way too hot - minimal feeding
+    augerState.currentOnTime = MIN_ON_TIME;
+    augerState.currentOffTime = MAX_OFF_TIME;
+  }
+  
+  // Apply limits
+  augerState.currentOnTime = constrain(augerState.currentOnTime, MIN_ON_TIME, MAX_ON_TIME);
+  augerState.currentOffTime = constrain(augerState.currentOffTime, MIN_OFF_TIME, MAX_OFF_TIME);
+}
+
+void pellet_manual_prime(unsigned long primeTime) {
+  Serial.printf("🌾 Pellet: Manual prime for %lu seconds\n", primeTime / 1000);
+  
+  // Stop any current cycle
+  if (augerState.isRunning) {
+    pellet_stop_auger();
+    delay(1000);
+  }
+  
+  // Run auger for specified time
+  RelayRequest primeReq = {RELAY_NOCHANGE, RELAY_ON, RELAY_ON, RELAY_NOCHANGE};
+  relay_request_manual(&primeReq);
+  
+  unsigned long startTime = millis();
+  while (millis() - startTime < primeTime) {
+    delay(100);
+    // Allow other tasks to run
+    yield();
+  }
+  
+  // Stop auger
+  RelayRequest stopReq = {RELAY_NOCHANGE, RELAY_OFF, RELAY_NOCHANGE, RELAY_NOCHANGE};
+  relay_request_manual(&stopReq);
+  
+  // Reset cycle timing
+  augerState.lastCycleEndTime = millis();
+  
+  Serial.println("🌾 Pellet: Manual prime complete");
+}
+
+void pellet_set_startup_mode() {
+  grillMode = false;
+  // Use faster feeding during startup
+  augerState.currentOnTime = STARTUP_ON_TIME;
+  augerState.currentOffTime = STARTUP_OFF_TIME;
+  Serial.println("🌾 Pellet: Startup mode - faster feeding");
+}
+
+void pellet_set_cooking_mode() {
+  grillMode = true;
+  // Return to normal feeding
+  augerState.currentOnTime = DEFAULT_ON_TIME;
+  augerState.currentOffTime = DEFAULT_OFF_TIME;
+  Serial.println("🌾 Pellet: Cooking mode - normal feeding");
+}
+
+String pellet_get_status() {
+  if (!grillRunning) {
+    return "IDLE";
+  }
+  
+  if (augerState.isRunning) {
+    unsigned long remaining = augerState.currentOnTime - (millis() - augerState.cycleStartTime);
+    return "FEEDING (" + String(remaining / 1000) + "s)";
+  } else {
+    unsigned long remaining = augerState.currentOffTime - (millis() - augerState.lastCycleEndTime);
+    return "WAITING (" + String(remaining / 1000) + "s)";
+  }
+}
+
+void pellet_print_status() {
+  if (!grillRunning) return;
+  
+  double currentTemp = readGrillTemperature();
+  double tempError = setpoint - currentTemp;
+  
+  Serial.printf("🌾 Pellet Status: Temp=%.1f°F Target=%.1f°F Error=%.1f°F\n", 
+                currentTemp, setpoint, tempError);
+  Serial.printf("   Timing: %lu sec ON, %lu sec OFF | Cycles: %lu | %s\n",
+                augerState.currentOnTime / 1000, augerState.currentOffTime / 1000,
+                augerState.cycleCount, augerState.isRunning ? "FEEDING" : "WAITING");
+}
+
+void pellet_emergency_stop() {
+  Serial.println("🚨 PELLET EMERGENCY STOP - SAFETY PROTOCOL");
+  
+  // Immediately stop auger
+  RelayRequest emergencyReq = {RELAY_OFF, RELAY_OFF, RELAY_ON, RELAY_ON};
+  relay_request_auto(&emergencyReq);
+  
+  augerState.isRunning = false;
+  augerState.cycleStartTime = 0;
+  augerState.lastCycleEndTime = millis();
+  
+  // Keep fans running for safety cooling
+  Serial.println("Fans will continue running for safety");
+  Serial.println("DO NOT open hopper or grill lid if you suspect fire");
+  Serial.println("If fire suspected, move grill away from structures");
+}
+
+// Settings persistence
+void savePelletSettings() {
+  preferences.begin("pellet", false);
+  preferences.putULong("defaultOn", DEFAULT_ON_TIME);
+  preferences.putULong("defaultOff", DEFAULT_OFF_TIME);
+  preferences.end();
+}
+
+void loadPelletSettings() {
+  preferences.begin("pellet", true);
+  // Load settings if needed in the future
+  preferences.end();
+}
+
+// Get current auger state (for web interface)
+AugerState pellet_get_auger_state() {
+  return augerState;
+}
