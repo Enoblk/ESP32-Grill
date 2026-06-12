@@ -49,9 +49,16 @@ static void setupWiFi() {
 
 void setup() {
   Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+  unsigned long serialStart = millis();
+  while (!Serial && millis() - serialStart < 1500) {
+    delay(10);
+  }
+#endif
   delay(200);
   Serial.println();
   Serial.println("=== ESP32 Grill Controller stable build ===");
+  Serial.printf("Board: %s\n", GRILL_BOARD_NAME);
   Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
 
   Wire.begin(SDA_PIN, SCL_PIN);
