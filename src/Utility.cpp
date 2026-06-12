@@ -1,95 +1,97 @@
-// Utility.cpp - Clean version for temperature reading
-#include "Utility.h" 
+#include "Utility.h"
 #include "Globals.h"
-#include "MAX31865Sensor.h"
 #include "Ignition.h"
+#include "MAX31865Sensor.h"
 
-// Keep debug flags but make them simple
 bool debugGrillSensor = false;
+bool debugAmbientSensor = false;
+bool debugMeatProbes = false;
+bool debugRelays = false;
+bool debugSystem = false;
 
-// Temperature validation
+static double cachedGrillTemp = NAN;
+static unsigned long lastReadAttemptMs = 0;
+static unsigned long lastGoodReadMs = 0;
+static uint8_t badReadCount = 0;
+
 bool isValidTemperature(double temp) {
-  if (isnan(temp) || isinf(temp)) return false;
-  if (temp <= -900.0 || temp >= 999.0) return false;
-  return true;
+  return !isnan(temp) && !isinf(temp) && temp > -100.0 && temp < 1000.0;
 }
 
-// Simple debug control
-void setGrillDebug(bool enabled) {
-  debugGrillSensor = enabled;
+bool grillTemperatureHealthy() {
+  if (!isValidTemperature(cachedGrillTemp)) return false;
+  return millis() - lastGoodReadMs < 10000;
 }
 
-void setAllDebug(bool enabled) {
-  debugGrillSensor = enabled;
+unsigned long grillTemperatureAgeMs() {
+  return lastGoodReadMs == 0 ? ULONG_MAX : millis() - lastGoodReadMs;
 }
 
-bool getGrillDebug() { return debugGrillSensor; }
-
-// Simple temperature reading - restore original approach  
 double readGrillTemperature() {
-  static unsigned long lastReading = 0;
-  static double cachedTemp = 70.0;
-  
-  // Only read every 1 second 
-  if (millis() - lastReading < 1000) {
-    return cachedTemp;
+  unsigned long now = millis();
+  if (now - lastReadAttemptMs < 1000 && isValidTemperature(cachedGrillTemp)) {
+    return cachedGrillTemp;
   }
-  
-  // Read from MAX31865 - simple approach like original
+  lastReadAttemptMs = now;
+
   double temp = grillSensor.readTemperatureF();
-  
   if (isValidTemperature(temp)) {
-    cachedTemp = temp;
-    lastReading = millis();
-    return temp;
+    cachedGrillTemp = temp;
+    lastGoodReadMs = now;
+    badReadCount = 0;
+    return cachedGrillTemp;
   }
-  
-  // Return cached value if current reading is bad
-  return cachedTemp;
+
+  if (badReadCount < 255) badReadCount++;
+  if (debugGrillSensor || badReadCount == 3) {
+    Serial.printf("Grill temp read failed; bad=%u age=%lu ms\n",
+                  badReadCount, grillTemperatureAgeMs());
+  }
+
+  if (grillTemperatureHealthy()) return cachedGrillTemp;
+  return NAN;
 }
 
-// Simple temperature function for compatibility
 double readTemperature() {
   return readGrillTemperature();
 }
 
-// STATUS FUNCTION - Keep simple
+double readAmbientTemperature() {
+  int raw = analogRead(AMBIENT_TEMP_PIN);
+  if (raw <= 0 || raw >= 4095) return NAN;
+  return NAN;
+}
+
 String getStatus(double temp) {
-  if (!grillRunning) {
-    return "IDLE";
-  }
-  
-  if (!isValidTemperature(temp)) {
-    return "SENSOR ERROR";
-  }
-  
-  // Use ignition state for status
+  if (!grillRunning) return "IDLE";
+  if (!isValidTemperature(temp)) return "SENSOR ERROR";
   return ignition_get_status_string();
 }
 
-// Stub functions to keep compatibility but remove complexity
-void setupTemperatureCalibration() {
-  // Do nothing - keep simple
+void setGrillDebug(bool enabled) { debugGrillSensor = enabled; }
+void setAmbientDebug(bool enabled) { debugAmbientSensor = enabled; }
+void setMeatProbesDebug(bool enabled) { debugMeatProbes = enabled; }
+void setRelayDebug(bool enabled) { debugRelays = enabled; }
+void setSystemDebug(bool enabled) { debugSystem = enabled; }
+void setAllDebug(bool enabled) {
+  debugGrillSensor = enabled;
+  debugAmbientSensor = enabled;
+  debugMeatProbes = enabled;
+  debugRelays = enabled;
+  debugSystem = enabled;
 }
 
-void handleCalibrationCommands(String command) {
-  // Do nothing - remove serial command processing
-}
+bool getGrillDebug() { return debugGrillSensor; }
+bool getAmbientDebug() { return debugAmbientSensor; }
+bool getMeatProbesDebug() { return debugMeatProbes; }
+bool getRelayDebug() { return debugRelays; }
+bool getSystemDebug() { return debugSystem; }
 
-void printCalibrationStatus() {
-  // Do nothing - remove verbose output
-}
-
-void runTemperatureDiagnostics() {
-  // Do nothing - remove complex diagnostics
-}
-
-void testGrillSensor() {
-  // Do nothing - remove test functions
-}
-
-// Remove all the complex functions - keep as empty stubs
-double readAmbientTemperature() { return -999.0; }
+void setupTemperatureCalibration() {}
+void printCalibrationStatus() {}
+void handleCalibrationCommands(String command) { (void)command; }
+void runTemperatureDiagnostics() {}
+void testGrillSensor() {}
 void resetCalibration() {}
 void saveCalibrationData() {}
 void loadCalibrationData() {}
@@ -98,17 +100,5 @@ void debugTemperatureLoop() {}
 void testAmbientNTC() {}
 void testSpecificProbe() {}
 void testAmbientSensor() {}
-void setTemperatureDebugMode(bool enabled) {}
-bool isDebugModeEnabled() { return false; }
-
-// Remove all other debug setters
-void setAmbientDebug(bool enabled) {}
-void setMeatProbesDebug(bool enabled) {}
-void setRelayDebug(bool enabled) {}
-void setSystemDebug(bool enabled) {}
-
-// Remove all other debug getters  
-bool getAmbientDebug() { return false; }
-bool getMeatProbesDebug() { return false; }
-bool getRelayDebug() { return false; }
-bool getSystemDebug() { return false; }
+void setTemperatureDebugMode(bool enabled) { debugGrillSensor = enabled; }
+bool isDebugModeEnabled() { return debugGrillSensor; }
