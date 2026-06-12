@@ -1,195 +1,189 @@
-// Ignition.cpp - COMPLETELY CLEAN - Replace your entire file with this
 #include "Ignition.h"
 #include "Globals.h"
 #include "Utility.h"
 
-// Simple 3-state system using existing enums
 static IgnitionState currentState = IGNITION_OFF;
 static unsigned long stateStartTime = 0;
 static unsigned long lastAugerAction = 0;
 static bool augerCurrentlyOn = false;
+static bool primeActive = false;
+static unsigned long primeEndTime = 0;
 
-// Simple relay control - NO sensor access
-void setRelay(int pin, bool state) {
+static void setRelay(int pin, bool state) {
   digitalWrite(pin, state ? HIGH : LOW);
 }
 
-void ignition_init() {
-  // Setup relay pins
-  pinMode(RELAY_IGNITER_PIN, OUTPUT);
-  pinMode(RELAY_AUGER_PIN, OUTPUT);
-  pinMode(RELAY_HOPPER_FAN_PIN, OUTPUT);
-  pinMode(RELAY_BLOWER_FAN_PIN, OUTPUT);
-  
-  // All off initially
+static void allRelaysOff() {
   setRelay(RELAY_IGNITER_PIN, false);
   setRelay(RELAY_AUGER_PIN, false);
   setRelay(RELAY_HOPPER_FAN_PIN, false);
   setRelay(RELAY_BLOWER_FAN_PIN, false);
-  
-  currentState = IGNITION_OFF;
   augerCurrentlyOn = false;
 }
 
-void ignition_start(double currentTemp) {
-  if (currentState == IGNITION_OFF) {
-    currentState = IGNITION_LIGHTING; // Start in lighting phase
-    stateStartTime = millis();
-    lastAugerAction = millis();
-    
-    // Always turn on fans when starting
-    setRelay(RELAY_HOPPER_FAN_PIN, true);
-    setRelay(RELAY_BLOWER_FAN_PIN, true);
-    
-    grillRunning = true;
+static void servicePrime(unsigned long now) {
+  if (!primeActive) return;
+  if ((long)(now - primeEndTime) >= 0) {
+    primeActive = false;
+    setRelay(RELAY_AUGER_PIN, false);
+    setRelay(RELAY_HOPPER_FAN_PIN, false);
+    Serial.println("Auger prime complete");
   }
+}
+
+void ignition_init() {
+  pinMode(RELAY_IGNITER_PIN, OUTPUT);
+  pinMode(RELAY_AUGER_PIN, OUTPUT);
+  pinMode(RELAY_HOPPER_FAN_PIN, OUTPUT);
+  pinMode(RELAY_BLOWER_FAN_PIN, OUTPUT);
+  allRelaysOff();
+  currentState = IGNITION_OFF;
+  stateStartTime = millis();
+}
+
+void ignition_start(double currentTemp) {
+  if (currentState != IGNITION_OFF || primeActive) return;
+  if (!isValidTemperature(currentTemp)) {
+    Serial.println("Start refused: grill temperature sensor is not healthy");
+    currentState = IGNITION_FAILED;
+    return;
+  }
+
+  currentState = currentTemp >= 130.0 ? IGNITION_STABILIZE : IGNITION_LIGHTING;
+  stateStartTime = millis();
+  lastAugerAction = millis();
+  grillRunning = true;
+  setRelay(RELAY_HOPPER_FAN_PIN, true);
+  setRelay(RELAY_BLOWER_FAN_PIN, true);
+  Serial.println("Grill start accepted");
 }
 
 void ignition_stop() {
   currentState = IGNITION_OFF;
   grillRunning = false;
-  
-  // Turn everything off
-  setRelay(RELAY_IGNITER_PIN, false);
-  setRelay(RELAY_AUGER_PIN, false);
-  setRelay(RELAY_HOPPER_FAN_PIN, false);
-  setRelay(RELAY_BLOWER_FAN_PIN, false);
-  
-  augerCurrentlyOn = false;
+  primeActive = false;
+  allRelaysOff();
+  stateStartTime = millis();
+}
+
+void ignition_emergency_stop() {
+  Serial.println("Emergency stop: relays off");
+  ignition_stop();
+  currentState = IGNITION_FAILED;
 }
 
 void ignition_loop() {
-  if (!grillRunning || currentState == IGNITION_OFF) {
+  unsigned long now = millis();
+  servicePrime(now);
+
+  if (!grillRunning || currentState == IGNITION_OFF || currentState == IGNITION_FAILED) return;
+
+  double currentTemp = readGrillTemperature();
+  if (!isValidTemperature(currentTemp) || !grillTemperatureHealthy()) {
+    Serial.println("Emergency stop: grill temperature sensor lost");
+    ignition_emergency_stop();
     return;
   }
-  
-  unsigned long now = millis();
-  double currentTemp = readGrillTemperature();
-  
-  // Calculate temperature error (how far off target we are)
-  double tempError = setpoint - currentTemp;
-  
-  // PiFire-style auger timing based on temperature error
-  unsigned long augerOnTime = 8000;   // Default 8 seconds
-  unsigned long augerOffTime = 75000; // Default 75 seconds
-  
-  // Enhanced error curve with more points for better control
-  if (tempError > 100.0) {
-    // WAY TOO COLD - emergency heating
-    augerOnTime = 30000;   // 30 seconds ON
-    augerOffTime = 20000;  // 20 seconds OFF
-  } else if (tempError > 75.0) {
-    // VERY COLD - aggressive heating  
-    augerOnTime = 25000;   // 25 seconds ON
-    augerOffTime = 25000;  // 25 seconds OFF
-  } else if (tempError > 50.0) {
-    // COLD - heavy heating
-    augerOnTime = 20000;   // 20 seconds ON
-    augerOffTime = 35000;  // 35 seconds OFF
-  } else if (tempError > 30.0) {
-    // COOL - moderate heating
-    augerOnTime = 16000;   // 16 seconds ON
-    augerOffTime = 45000;  // 45 seconds OFF
-  } else if (tempError > 15.0) {
-    // SLIGHTLY COOL - gentle heating
-    augerOnTime = 12000;   // 12 seconds ON
-    augerOffTime = 55000;  // 55 seconds OFF
-  } else if (tempError > 5.0) {
-    // CLOSE TO TARGET - fine tuning
-    augerOnTime = 10000;   // 10 seconds ON
-    augerOffTime = 65000;  // 65 seconds OFF
-  } else if (tempError > -5.0) {
-    // AT TARGET - maintenance mode
-    augerOnTime = 8000;    // 8 seconds ON
-    augerOffTime = 75000;  // 75 seconds OFF
-  } else if (tempError > -15.0) {
-    // SLIGHTLY HOT - reduce pellets
-    augerOnTime = 6000;    // 6 seconds ON
-    augerOffTime = 85000;  // 85 seconds OFF
-  } else if (tempError > -25.0) {
-    // HOT - minimal pellets
-    augerOnTime = 4000;    // 4 seconds ON
-    augerOffTime = 100000; // 100 seconds OFF
-  } else {
-    // TOO HOT - stop feeding temporarily
-    augerOnTime = 0;       // 0 seconds ON
-    augerOffTime = 120000; // 2 minutes OFF
+
+  if (currentTemp >= EMERGENCY_TEMP) {
+    Serial.printf("Emergency stop: %.1f F exceeds %.1f F\n", currentTemp, EMERGENCY_TEMP);
+    ignition_emergency_stop();
+    return;
   }
-  
-  // Handle ignition phase special case
-  if (currentTemp < 130.0 && currentState == IGNITION_LIGHTING) {
-    // During ignition under 130F, run igniter and use ignition timing
+
+  double tempError = setpoint - currentTemp;
+  unsigned long augerOnTime = 8000;
+  unsigned long augerOffTime = 75000;
+
+  if (tempError > 100.0) {
+    augerOnTime = 30000; augerOffTime = 20000;
+  } else if (tempError > 75.0) {
+    augerOnTime = 25000; augerOffTime = 25000;
+  } else if (tempError > 50.0) {
+    augerOnTime = 20000; augerOffTime = 35000;
+  } else if (tempError > 30.0) {
+    augerOnTime = 16000; augerOffTime = 45000;
+  } else if (tempError > 15.0) {
+    augerOnTime = 12000; augerOffTime = 55000;
+  } else if (tempError > 5.0) {
+    augerOnTime = 10000; augerOffTime = 65000;
+  } else if (tempError > -5.0) {
+    augerOnTime = 8000; augerOffTime = 75000;
+  } else if (tempError > -15.0) {
+    augerOnTime = 6000; augerOffTime = 85000;
+  } else if (tempError > -25.0) {
+    augerOnTime = 4000; augerOffTime = 100000;
+  } else {
+    augerOnTime = 0; augerOffTime = 120000;
+  }
+
+  if (currentState == IGNITION_LIGHTING && currentTemp < 130.0) {
     setRelay(RELAY_IGNITER_PIN, true);
-    
-    // Override with ignition-specific timing (more aggressive)
-    augerOnTime = 45000;   // 45 seconds ON
-    augerOffTime = 15000;  // 15 seconds OFF
-    
-    // Safety timeout - stop igniting after 15 minutes
-    if ((now - stateStartTime) > (15 * 60 * 1000)) {
-      ignition_stop();
+    augerOnTime = 45000;
+    augerOffTime = 15000;
+    if (now - stateStartTime > 15UL * 60UL * 1000UL) {
+      Serial.println("Ignition failed: startup timeout");
+      ignition_emergency_stop();
       return;
     }
   } else {
-    // Turn off igniter after 130F
     setRelay(RELAY_IGNITER_PIN, false);
-    if (currentState == IGNITION_LIGHTING) {
-      currentState = IGNITION_STABILIZE; // Move to normal operation
-    }
+    if (currentState == IGNITION_LIGHTING) currentState = IGNITION_STABILIZE;
   }
-  
-  // Execute the auger cycle based on calculated timing
-  if (!augerCurrentlyOn) {
-    // Check if it's time to turn auger ON
-    if ((now - lastAugerAction) >= augerOffTime) {
-      if (augerOnTime > 0) {  // Only turn on if we want pellets
-        setRelay(RELAY_AUGER_PIN, true);
-        augerCurrentlyOn = true;
-        lastAugerAction = now;
-      } else {
-        // Skip this cycle if augerOnTime is 0 (too hot)
-        lastAugerAction = now;
-      }
+
+  if (!augerCurrentlyOn && now - lastAugerAction >= augerOffTime) {
+    if (augerOnTime > 0) {
+      setRelay(RELAY_AUGER_PIN, true);
+      augerCurrentlyOn = true;
     }
-  } else {
-    // Check if it's time to turn auger OFF
-    if ((now - lastAugerAction) >= augerOnTime) {
-      setRelay(RELAY_AUGER_PIN, false);
-      augerCurrentlyOn = false;
-      lastAugerAction = now;
-    }
+    lastAugerAction = now;
+  } else if (augerCurrentlyOn && now - lastAugerAction >= augerOnTime) {
+    setRelay(RELAY_AUGER_PIN, false);
+    augerCurrentlyOn = false;
+    lastAugerAction = now;
   }
-  
-  // Update status based on temperature error
+
   if (currentTemp < 130.0) {
     currentState = IGNITION_LIGHTING;
   } else if (abs(tempError) <= 10.0) {
-    currentState = IGNITION_COMPLETE;  // At target
+    currentState = IGNITION_COMPLETE;
   } else {
-    currentState = IGNITION_STABILIZE; // Heating/cooling
+    currentState = IGNITION_STABILIZE;
   }
-  
-  // Emergency safety - shut down if too hot
-  if (currentTemp > 600.0) {
-    ignition_stop();
-  }
-  
-  // Debug output every 30 seconds
+
   static unsigned long lastDebug = 0;
   if (now - lastDebug >= 30000) {
-    Serial.printf("🌡️ Temp: %.1f°F, Target: %.1f°F, Error: %.1f°F\n", currentTemp, setpoint, tempError);
-    Serial.printf("🌾 Auger: %s, Timing: %lus ON / %lus OFF\n", 
-                  augerCurrentlyOn ? "ON" : "OFF", augerOnTime/1000, augerOffTime/1000);
+    Serial.printf("Temp %.1f F target %.1f F error %.1f F auger %s (%lus/%lus)\n",
+                  currentTemp, setpoint, tempError, augerCurrentlyOn ? "ON" : "OFF",
+                  augerOnTime / 1000, augerOffTime / 1000);
     lastDebug = now;
   }
 }
 
-// Status functions - Only use enum values that compiler recognizes
-IgnitionState ignition_get_state() {
-  return currentState;
+bool auger_prime_start(unsigned long durationMs) {
+  if (grillRunning || primeActive) return false;
+  primeActive = true;
+  primeEndTime = millis() + durationMs;
+  setRelay(RELAY_AUGER_PIN, true);
+  setRelay(RELAY_HOPPER_FAN_PIN, true);
+  Serial.printf("Auger prime started for %lu ms\n", durationMs);
+  return true;
 }
 
+bool auger_prime_active() {
+  return primeActive;
+}
+
+unsigned long auger_prime_remaining_ms() {
+  if (!primeActive) return 0;
+  long remaining = (long)(primeEndTime - millis());
+  return remaining > 0 ? (unsigned long)remaining : 0;
+}
+
+IgnitionState ignition_get_state() { return currentState; }
+
 String ignition_get_status_string() {
+  if (primeActive) return "PRIMING";
   switch (currentState) {
     case IGNITION_OFF: return "OFF";
     case IGNITION_PREHEAT: return "PREHEAT";
@@ -201,43 +195,16 @@ String ignition_get_status_string() {
   }
 }
 
-bool ignition_is_complete() {
-  return currentState == IGNITION_COMPLETE;
-}
-
-bool ignition_has_failed() {
-  return currentState == IGNITION_FAILED;
-}
+bool ignition_is_active() { return grillRunning; }
+bool ignition_is_complete() { return currentState == IGNITION_COMPLETE; }
+bool ignition_has_failed() { return currentState == IGNITION_FAILED; }
+unsigned long ignition_get_runtime() { return millis() - stateStartTime; }
 
 void ignition_set_target_temp(double temp) {
   setpoint = temp;
+  clamp_setpoint();
 }
 
-double ignition_get_target_temp() {
-  return setpoint;
-}
-
-// Keep the PiFire functions simple
-void pifire_auger_cycle() {
-  // Do nothing - control is now in ignition_loop()
-}
-
-void pifire_manual_auger_prime() {
-  // Simple 30-second prime
-  if (!grillRunning) {
-    setRelay(RELAY_AUGER_PIN, true);
-    setRelay(RELAY_HOPPER_FAN_PIN, true);
-    delay(30000);  // 30 second prime
-    setRelay(RELAY_AUGER_PIN, false);
-    setRelay(RELAY_HOPPER_FAN_PIN, false);
-  }
-}
-
-void pifire_temperature_control() {
-  // Do nothing - control is now in ignition_loop()
-}
-
-String pifire_get_status() {
-  if (!grillRunning) return "IDLE";
-  return augerCurrentlyOn ? "FEEDING" : "WAITING";
-}
+double ignition_get_target_temp() { return setpoint; }
+void ignition_complete() { currentState = IGNITION_COMPLETE; }
+void ignition_fail() { ignition_emergency_stop(); }

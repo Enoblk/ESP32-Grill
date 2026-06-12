@@ -1,120 +1,96 @@
-// Main.ino - REPLACE ENTIRE FILE - Remove conflicting includes
 #include <Arduino.h>
-#include <Wire.h>
-#include <WiFi.h>
 #include <SPI.h>
+#include <WiFi.h>
+#include <Wire.h>
 
-// Keep essential includes only
 #include "Globals.h"
-#include "Utility.h"
-#include "MAX31865Sensor.h"
-#include "Ignition.h"
 #include "GrillWebServer.h"
+#include "Ignition.h"
+#include "MAX31865Sensor.h"
+#include "Utility.h"
 
-// Comment out the conflicting includes
-// #include "RelayControl.h"         // CONFLICTS with PelletControl.cpp
-// #include "PelletControl.h"        // CONFLICTS with RelayControl.cpp
-// #include "ButtonInput.h"          
-// #include "OLEDDisplay.h"          
-// #include "WiFiManager.h"          
-// #include "TemperatureSensor.h"    
-// #include "Settings.h"             
+static void setupWiFi() {
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
+  WiFi.softAP("GrillController", "12345678");
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());
+
+  if (!preferences.begin("wifi", true)) {
+    Serial.println("WiFi preferences unavailable");
+    return;
+  }
+  String ssid = preferences.getString("ssid", "");
+  String password = preferences.getString("password", "");
+  preferences.end();
+
+  if (ssid.isEmpty()) {
+    Serial.println("No saved WiFi credentials");
+    return;
+  }
+
+  Serial.printf("Connecting to WiFi SSID: %s\n", ssid.c_str());
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+    delay(100);
+    yield();
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("WiFi IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi connect timed out; AP remains available");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-  
-  Serial.println("=== SIMPLIFIED GRILL CONTROLLER v1.1 ===");
+#if ARDUINO_USB_CDC_ON_BOOT
+  unsigned long serialStart = millis();
+  while (!Serial && millis() - serialStart < 1500) {
+    delay(10);
+  }
+#endif
+  delay(200);
+  Serial.println();
+  Serial.println("=== ESP32 Grill Controller stable build ===");
+  Serial.printf("Board: %s\n", GRILL_BOARD_NAME);
   Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
-  
-  // Initialize I2C and SPI
+
   Wire.begin(SDA_PIN, SCL_PIN);
   SPI.begin();
-    
-  // Initialize ignition system (now handles all control including relays)
+
   ignition_init();
-  
-  // Initialize MAX31865 RTD sensor - original approach
-  Serial.println("Initializing MAX31865 RTD sensor...");
-  if (!grillSensor.begin(MAX31865_CS_PIN, RREF, RNOMINAL)) {
-    Serial.println("MAX31865 sensor failed to initialize");
-  } else {
-    Serial.println("MAX31865 sensor initialized successfully");
-  }
-  
-  // Load settings
   load_setpoint();
-  
-  // Load and connect to WiFi if credentials exist
-  preferences.begin("wifi", true);
-  String savedSSID = preferences.getString("ssid", "");
-  String savedPassword = preferences.getString("password", "");
-  preferences.end();
-  
-  if (savedSSID.length() > 0) {
-    Serial.println("Found saved WiFi credentials, attempting to connect...");
-    Serial.print("SSID: ");
-    Serial.println(savedSSID);
-    
-    WiFi.mode(WIFI_AP_STA);  // Both AP and Station mode
-    WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
-    
-    // Wait up to 15 seconds for connection
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println();
-      Serial.println("WiFi connected successfully!");
-      Serial.print("IP address: ");
-      Serial.println(WiFi.localIP());
-    } else {
-      Serial.println();
-      Serial.println("WiFi connection failed, staying in AP mode");
-    }
-  } else {
-    Serial.println("No saved WiFi credentials found");
+
+  if (!grillSensor.begin(MAX31865_CS_PIN, RREF, RNOMINAL)) {
+    Serial.println("MAX31865 did not pass initial read; controller will refuse starts until it reads cleanly");
   }
-  
-  // Always ensure AP mode is active for initial setup
-  if (!WiFi.softAPgetStationNum()) {  // If no stations connected to AP
-    WiFi.softAP("GrillController", "12345678");
-    Serial.print("AP IP: ");
-    Serial.println(WiFi.softAPIP());
-  }
-  
-  // Setup web server
+
+  setupWiFi();
   setup_grill_server();
-  
-  Serial.println("Setup complete - simplified mode");
+  Serial.println("Setup complete");
 }
 
 void loop() {
-  static unsigned long lastTempUpdate = 0;
-  static unsigned long lastStatus = 0;
-  
-  unsigned long now = millis();
-  
-  // Temperature updates every 2 seconds
-  if (now - lastTempUpdate >= 2000) {
-    // Temperature reading is handled in ignition_loop()
-    lastTempUpdate = now;
-  }
-  
-  // Run simplified ignition control (handles everything now)
+  handle_grill_server();
   ignition_loop();
-  
-  // Status every 60 seconds (minimal output)
+
+  static unsigned long lastStatus = 0;
+  unsigned long now = millis();
   if (now - lastStatus >= 60000) {
     double temp = readGrillTemperature();
-    Serial.printf("%s: %.1fF -> %.1fF, Heap: %d\n", 
-                  ignition_get_status_string().c_str(), temp, setpoint, ESP.getFreeHeap());
+    Serial.printf("%s temp=%s target=%.1fF heap=%u\n",
+                  ignition_get_status_string().c_str(),
+                  isValidTemperature(temp) ? String(temp, 1).c_str() : "ERR",
+                  setpoint,
+                  ESP.getFreeHeap());
     lastStatus = now;
   }
-  
-  delay(100);
+
+  delay(20);
 }
